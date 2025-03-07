@@ -1,0 +1,850 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KnowledgeForge - AI Learning Assistant</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
+    <!-- Use local copy of Mermaid.js -->
+    <script src="/static/mermaid.min.js"></script>
+    <style>
+        :root {
+            --primary: #5e35b1;
+            --primary-light: #7c51d1;
+            --secondary: #00bcd4;
+            --dark: #1a1a2e;
+            --light: #f5f5f5;
+            --success: #4caf50;
+            --error: #f44336;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: var(--dark);
+            color: var(--light);
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: -1;
+            opacity: 0.8;
+        }
+
+        .container {
+            max-width: 1300px;
+            margin: 0 auto;
+            padding: 30px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(15px);
+            border-radius: 20px;
+            box-shadow: 0 8px 40px rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 30px;
+            margin-bottom: 30px;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .glass-panel:hover {
+            transform: translateY(-8px) rotateX(2deg);
+            box-shadow: 0 15px 50px rgba(0, 0, 0, 0.3);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            font-weight: 700;
+            font-size: 28px;
+            color: var(--secondary);
+            text-shadow: 0 0 10px var(--secondary);
+        }
+
+        .logo i {
+            margin-right: 15px;
+            font-size: 36px;
+            animation: pulse 2s infinite;
+        }
+
+        .app-layout {
+            display: grid;
+            grid-template-columns: 1fr 2fr;
+            gap: 30px;
+        }
+
+        h2 {
+            margin-bottom: 25px;
+            color: var(--secondary);
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            text-shadow: 0 0 5px var(--secondary);
+        }
+
+        h2 i {
+            margin-right: 12px;
+        }
+
+        .input-group {
+            margin-bottom: 25px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: 500;
+            color: #e0e0e0;
+        }
+
+        input, textarea, select {
+            width: 100%;
+            padding: 14px 18px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+            color: var(--light);
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        input:focus, textarea:focus, select:focus {
+            outline: none;
+            border-color: var(--secondary);
+            background: rgba(255, 255, 255, 0.15);
+            box-shadow: 0 0 10px rgba(0, 188, 212, 0.5);
+        }
+
+        button {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 14px 30px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 5px 15px rgba(94, 53, 177, 0.4);
+        }
+
+        button:hover {
+            background: var(--primary-light);
+            transform: translateY(-3px);
+            box-shadow: 0 10px 25px rgba(94, 53, 177, 0.6);
+        }
+
+        button i {
+            margin-right: 10px;
+        }
+
+        .tab-container {
+            margin-bottom: 25px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .tab {
+            padding: 12px 25px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 5px 15px rgba(94, 53, 177, 0.4);
+        }
+
+        .tab:hover:not(.active) {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .results-area {
+            min-height: 300px;
+        }
+
+        .result-card {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            border-left: 5px solid var(--secondary);
+            transition: transform 0.3s ease;
+        }
+
+        .result-card:hover {
+            transform: scale(1.03);
+        }
+
+        .result-card h3 {
+            margin-bottom: 15px;
+            color: var(--secondary);
+            font-size: 20px;
+        }
+
+        .sources-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin: 20px 0;
+        }
+
+        .source-pill {
+            background: rgba(94, 53, 177, 0.3);
+            padding: 8px 18px;
+            border-radius: 20px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .source-pill:hover {
+            background: rgba(94, 53, 177, 0.5);
+        }
+
+        .source-pill i {
+            margin-right: 8px;
+            font-size: 14px;
+        }
+
+        .notification {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: var(--success);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .notification.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+
+        .notification.error {
+            background: var(--error);
+        }
+
+        .loader {
+            display: inline-block;
+            width: 25px;
+            height: 25px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 12px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .loading-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .spinner {
+            width: 60px;
+            height: 60px;
+            border: 5px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: var(--secondary);
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        .mind-map-container, .flowchart-container {
+            text-align: center;
+            margin-top: 25px;
+        }
+
+        .mind-map-container img, .flowchart-container img {
+            max-width: 100%;
+            border-radius: 15px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Added Mermaid styling */
+        .mermaid-diagram {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 15px;
+            overflow-x: auto;
+        }
+
+        @media (max-width: 768px) {
+            .app-layout {
+                grid-template-columns: 1fr;
+            }
+            .container {
+                padding: 20px;
+            }
+            .glass-panel {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    
+    <div class="container">
+        <header class="glass-panel">
+            <div class="logo">
+                <i class="fas fa-brain"></i>
+                <span>KnowledgeForge</span>
+            </div>
+            <div>
+                <button id="clear-data">
+                    <i class="fas fa-trash"></i> Clear Data
+                </button>
+            </div>
+        </header>
+        
+        <div class="app-layout">
+            <div class="glass-panel">
+                <h2><i class="fas fa-database"></i> Knowledge Sources</h2>
+                
+                <div class="tab-container">
+                    <div class="tabs">
+                        <div class="tab active" data-tab="web">Web URL</div>
+                        <div class="tab" data-tab="video">YouTube</div>
+                        <div class="tab" data-tab="text">Custom Text</div>
+                    </div>
+                    
+                    <div class="tab-content active" id="web-tab">
+                        <div class="input-group">
+                            <label for="web-url">Enter a URL to extract content:</label>
+                            <input type="url" id="web-url" placeholder="https://example.com/article">
+                        </div>
+                        <button id="add-web-content">
+                            <i class="fas fa-globe"></i> Add Web Content
+                        </button>
+                    </div>
+                    
+                    <div class="tab-content" id="video-tab">
+                        <div class="input-group">
+                            <label for="video-url">Enter a YouTube URL:</label>
+                            <input type="url" id="video-url" placeholder="https://www.youtube.com/watch?v=...">
+                        </div>
+                        <button id="add-video-content">
+                            <i class="fab fa-youtube"></i> Add Video Content
+                        </button>
+                    </div>
+                    
+                    <div class="tab-content" id="text-tab">
+                        <div class="input-group">
+                            <label for="custom-text">Enter your own content:</label>
+                            <textarea id="custom-text" rows="5" placeholder="Paste or type your content here..."></textarea>
+                        </div>
+                        <button id="add-text-content">
+                            <i class="fas fa-file-alt"></i> Add Text Content
+                        </button>
+                    </div>
+                </div>
+                
+                <h3>Active Sources</h3>
+                <div id="sources-list" class="sources-list">
+                    <div class="source-pill"><i class="fas fa-circle-notch fa-spin"></i> Loading sources...</div>
+                </div>
+            </div>
+            
+            <div>
+                <div class="glass-panel">
+                    <h2><i class="fas fa-question-circle"></i> Ask Questions</h2>
+                    <div class="input-group">
+                        <label for="question">Ask anything about your content:</label>
+                        <input type="text" id="question" placeholder="What is the main concept of...?">
+                    </div>
+                    <div class="input-group">
+                        <label for="source-select">Specific source (optional):</label>
+                        <select id="source-select">
+                            <option value="">All sources</option>
+                        </select>
+                    </div>
+                    <button id="ask-button">
+                        <i class="fas fa-search"></i> Get Answer
+                    </button>
+                </div>
+                
+                <div class="glass-panel">
+                    <h2><i class="fas fa-tools"></i> Learning Tools</h2>
+                    <div class="tab-container">
+                        <div class="tabs">
+                            <div class="tab active" data-tool-tab="summary">Summary</div>
+                            <div class="tab" data-tool-tab="mocktest">Mock Test</div>
+                            <div class="tab" data-tool-tab="mindmap">Mind Map</div>
+                            <div class="tab" data-tool-tab="flowchart">Flowchart</div>
+                        </div>
+                        
+                        <div class="tab-content active" id="summary-tab">
+                            <div class="input-group">
+                                <label for="summary-source">Choose source (optional):</label>
+                                <select id="summary-source">
+                                    <option value="">All sources</option>
+                                </select>
+                            </div>
+                            <button id="get-summary">
+                                <i class="fas fa-compress-alt"></i> Generate Summary
+                            </button>
+                        </div>
+                        
+                        <div class="tab-content" id="mocktest-tab">
+                            <div class="input-group">
+                                <label for="test-topic">Test topic:</label>
+                                <input type="text" id="test-topic" placeholder="e.g., Machine Learning">
+                            </div>
+                            <div class="input-group">
+                                <label for="test-source">Choose source (optional):</label>
+                                <select id="test-source">
+                                    <option value="">All sources</option>
+                                </select>
+                            </div>
+                            <button id="generate-test">
+                                <i class="fas fa-clipboard-check"></i> Create Mock Test
+                            </button>
+                        </div>
+                        
+                        <div class="tab-content" id="mindmap-tab">
+                            <div class="input-group">
+                                <label for="mindmap-topic">Mind map topic:</label>
+                                <input type="text" id="mindmap-topic" placeholder="e.g., Artificial Intelligence">
+                            </div>
+                            <div class="input-group">
+                                <label for="mindmap-source">Choose source (optional):</label>
+                                <select id="mindmap-source">
+                                    <option value="">All sources</option>
+                                </select>
+                            </div>
+                            <button id="generate-mindmap">
+                                <i class="fas fa-project-diagram"></i> Create Mind Map
+                            </button>
+                        </div>
+                        
+                        <div class="tab-content" id="flowchart-tab">
+                            <div class="input-group">
+                                <label for="flowchart-topic">Flowchart topic or process:</label>
+                                <input type="text" id="flowchart-topic" placeholder="e.g., Data Processing">
+                            </div>
+                            <div class="input-group">
+                                <label for="flowchart-source">Choose source (optional):</label>
+                                <select id="flowchart-source">
+                                    <option value="">All sources</option>
+                                </select>
+                            </div>
+                            <button id="generate-flowchart">
+                                <i class="fas fa-random"></i> Create Flowchart
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="glass-panel results-area">
+                    <h2><i class="fas fa-lightbulb"></i> Results</h2>
+                    <div id="results-container">
+                        <div class="result-card">
+                            <h3>Welcome to KnowledgeForge</h3>
+                            <p>Start by adding content from web pages, YouTube videos, or your own text. Then use the tools to ask questions, generate summaries, create mock tests, or visualize concepts with mind maps and flowcharts.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="notification" id="notification">Operation successful!</div>
+    <div class="loading-overlay" id="loading-overlay">
+        <div class="spinner"></div>
+    </div>
+    
+    <script>
+        // Added Mermaid initialization with error handling
+        if (typeof mermaid !== 'undefined') {
+            mermaid.initialize({
+                startOnLoad: true,
+                theme: 'dark'
+            });
+        } else {
+            console.error('Mermaid.js failed to load. Mind maps and flowcharts will not render.');
+        }
+
+        // 3D Particle Background
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        const particlesGeometry = new THREE.BufferGeometry();
+        const particlesCount = 1500;
+        const posArray = new Float32Array(particlesCount * 3);
+
+        for (let i = 0; i < particlesCount * 3; i++) {
+            posArray[i] = (Math.random() - 0.5) * 15;
+        }
+
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+        const particlesMaterial = new THREE.PointsMaterial({
+            size: 0.03,
+            color: 0x00bcd4,
+            transparent: true,
+            opacity: 0.9
+        });
+
+        const particlesMesh = new THREE.Points(particlesGeometry, particlesMaterial);
+        scene.add(particlesMesh);
+
+        camera.position.z = 5;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            particlesMesh.rotation.x += 0.0008;
+            particlesMesh.rotation.y += 0.0008;
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Tab Functionality
+        const tabs = document.querySelectorAll('.tab');
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                const parent = tab.parentElement;
+                parent.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+
+                const tabType = tab.hasAttribute('data-tab') ? 'data-tab' : 'data-tool-tab';
+                const tabId = tab.getAttribute(tabType);
+                document.querySelectorAll('.tab-content').forEach(content => {
+                    content.classList.remove('active');
+                });
+                document.getElementById(`${tabId}-tab`).classList.add('active');
+            });
+        });
+
+        // API Interaction
+        let sources = [];
+
+        function showNotification(message, isError = false) {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.classList.remove('error');
+            if (isError) notification.classList.add('error');
+            notification.classList.add('show');
+            setTimeout(() => notification.classList.remove('show'), 3000);
+        }
+
+        function toggleLoading(show) {
+            const overlay = document.getElementById('loading-overlay');
+            overlay.classList.toggle('active', show);
+        }
+
+        function updateSources() {
+            fetch('http://localhost:5000/api/get-sources')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        sources = data.sources;
+                        const sourcesList = document.getElementById('sources-list');
+                        sourcesList.innerHTML = sources.length === 0
+                            ? '<div class="source-pill"><i class="fas fa-info-circle"></i> No sources added yet</div>'
+                            : sources.map(source => {
+                                const sourceType = source.includes('youtube') || source.includes('youtu.be') ? 'fab fa-youtube' : (source === 'User Input' ? 'fas fa-file-alt' : 'fas fa-globe');
+                                const shortSource = source.length > 30 ? source.substring(0, 30) + '...' : source;
+                                return `<div class="source-pill" title="${source}"><i class="${sourceType}"></i> ${shortSource}</div>`;
+                            }).join('');
+
+                        const sourceDropdowns = ['source-select', 'summary-source', 'test-source', 'mindmap-source', 'flowchart-source'];
+                        sourceDropdowns.forEach(id => {
+                            const dropdown = document.getElementById(id);
+                            dropdown.innerHTML = '<option value="">All sources</option>' + 
+                                sources.map(source => {
+                                    const shortSource = source.length > 40 ? source.substring(0, 40) + '...' : source;
+                                    return `<option value="${source}">${shortSource}</option>`;
+                                }).join('');
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching sources:', error);
+                    showNotification('Failed to load sources', true);
+                });
+        }
+
+        function addResult(title, content, isImage = false) {
+            const resultsContainer = document.getElementById('results-container');
+            const resultCard = document.createElement('div');
+            resultCard.className = 'result-card';
+            resultCard.innerHTML = `<h3>${title}</h3>`;
+            if (isImage) {
+                resultCard.innerHTML += `<div class="${title.toLowerCase().includes('mind') ? 'mind-map' : 'flowchart'}-container"><img src="${content}" alt="${title}"></div>`;
+            } else {
+                resultCard.innerHTML += `<p>${content.replace(/\n/g, '<br>')}</p>`;
+            }
+            resultsContainer.prepend(resultCard);
+        }
+
+        // Event Listeners
+        document.getElementById('add-web-content').addEventListener('click', () => {
+            const url = document.getElementById('web-url').value.trim();
+            if (!url) return showNotification('Please enter a valid URL', true);
+            toggleLoading(true);
+            fetch('http://localhost:5000/api/add-web-content', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url })
+            })
+            .then(response => response.json())
+            .then(data => {
+                toggleLoading(false);
+                showNotification(data.message, !data.success);
+                if (data.success) {
+                    document.getElementById('web-url').value = '';
+                    updateSources();
+                }
+            })
+            .catch(error => {
+                toggleLoading(false);
+                showNotification('Failed to add web content', true);
+            });
+        });
+
+        document.getElementById('add-video-content').addEventListener('click', () => {
+            const url = document.getElementById('video-url').value.trim();
+            if (!url) return showNotification('Please enter a valid YouTube URL', true);
+            toggleLoading(true);
+            fetch('http://localhost:5000/api/add-video', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url })
+            })
+            .then(response => response.json())
+            .then(data => {
+                toggleLoading(false);
+                showNotification(data.message, !data.success);
+                if (data.success) {
+                    document.getElementById('video-url').value = '';
+                    updateSources();
+                }
+            })
+            .catch(error => {
+                toggleLoading(false);
+                showNotification('Failed to add video content', true);
+            });
+        });
+
+        document.getElementById('add-text-content').addEventListener('click', () => {
+            const text = document.getElementById('custom-text').value.trim();
+            if (!text) return showNotification('Please enter some text content', true);
+            toggleLoading(true);
+            fetch('http://localhost:5000/api/add-text', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text })
+            })
+            .then(response => response.json())
+            .then(data => {
+                toggleLoading(false);
+                showNotification(data.message, !data.success);
+                if (data.success) {
+                    document.getElementById('custom-text').value = '';
+                    updateSources();
+                }
+            })
+            .catch(error => {
+                toggleLoading(false);
+                showNotification('Failed to add text content', true);
+            });
+        });
+
+        document.getElementById('ask-button').addEventListener('click', () => {
+            const question = document.getElementById('question').value.trim();
+            const source = document.getElementById('source-select').value;
+            if (!question) return showNotification('Please enter a question', true);
+            toggleLoading(true);
+            fetch('http://localhost:5000/api/ask-question', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ question, source })
+            })
+            .then(response => response.json())
+            .then(data => {
+                toggleLoading(false);
+                if (data.success) addResult(`Q: ${data.question}`, data.answer);
+                else showNotification(data.message, true);
+            })
+            .catch(error => {
+                toggleLoading(false);
+                showNotification('Failed to get answer', true);
+            });
+        });
+
+        document.getElementById('get-summary').addEventListener('click', () => {
+            const source = document.getElementById('summary-source').value;
+            toggleLoading(true);
+            fetch('http://localhost:5000/api/get-summary', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ source })
+            })
+            .then(response => response.json())
+            .then(data => {
+                toggleLoading(false);
+                if (data.success) addResult(data.summary.title, data.summary.content);
+                else showNotification('Failed to generate summary', true);
+            })
+            .catch(error => {
+                toggleLoading(false);
+                showNotification('Failed to generate summary', true);
+            });
+        });
+
+        document.getElementById('generate-test').addEventListener('click', () => {
+            const topic = document.getElementById('test-topic').value.trim();
+            const source = document.getElementById('test-source').value;
+            if (!topic) return showNotification('Please enter a topic', true);
+            toggleLoading(true);
+            fetch('http://localhost:5000/api/generate-mock-test', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, source })
+            })
+            .then(response => response.json())
+            .then(data => {
+                toggleLoading(false);
+                if (data.success) addResult(data.mock_test.title, data.mock_test.content);
+                else showNotification(data.message, true);
+            })
+            .catch(error => {
+                toggleLoading(false);
+                showNotification('Failed to generate mock test', true);
+            });
+        });
+
+        document.getElementById('generate-mindmap').addEventListener('click', () => {
+            const topic = document.getElementById('mindmap-topic').value.trim();
+            const source = document.getElementById('mindmap-source').value;
+            if (!topic) return showNotification('Please enter a topic', true);
+            toggleLoading(true);
+            fetch('http://localhost:5000/api/generate-mind-map', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, source })
+            })
+            .then(response => response.json())
+            .then(data => {
+                toggleLoading(false);
+                if (data.success) addResult(data.title, data.image_path, true);
+                else showNotification(data.message, true);
+            })
+            .catch(error => {
+                toggleLoading(false);
+                showNotification('Failed to generate mind map', true);
+            });
+        });
+
+        document.getElementById('generate-flowchart').addEventListener('click', () => {
+            const topic = document.getElementById('flowchart-topic').value.trim();
+            const source = document.getElementById('flowchart-source').value;
+            if (!topic) return showNotification('Please enter a topic', true);
+            toggleLoading(true);
+            fetch('http://localhost:5000/api/generate-flowchart', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic, source })
+            })
+            .then(response => response.json())
+            .then(data => {
+                toggleLoading(false);
+                if (data.success) addResult(data.title, data.image_path, true);
+                else showNotification(data.message, true);
+            })
+            .catch(error => {
+                toggleLoading(false);
+                showNotification('Failed to generate flowchart', true);
+            });
+        });
+
+        document.getElementById('clear-data').addEventListener('click', () => {
+            sessionStorage.clear();
+            sources = [];
+            document.getElementById('results-container').innerHTML = '<div class="result-card"><h3>Data Cleared</h3><p>All content has been cleared from this session.</p></div>';
+            updateSources();
+            showNotification('All data cleared');
+        });
+
+        // Initial load
+        updateSources();
+    </script>
+</body>
+</html>
