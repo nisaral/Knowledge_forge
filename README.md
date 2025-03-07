@@ -115,5 +115,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ---
 
 <div align="center">
-  <sub>Built with ❤️ by the KnowledgeForge team</sub>
+  <sub>Built with ❤️ by the Keyush Nisar</sub>
 </div>
