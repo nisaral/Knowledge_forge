@@ -15,7 +15,7 @@ from graphviz import Digraph  # For mind maps and flowcharts
 import os
 
 # Configure Gemini API (replace with your API key)
-GEMINI_API_KEY = "AIzaSyDq3W6bcmtED-s0vDKmSBZr8uIwy4Gc1Io"  # Replace with your actual key
+GEMINI_API_KEY = ""  # Replace with your actual key
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Initialize models
