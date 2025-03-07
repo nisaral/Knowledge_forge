@@ -26,7 +26,7 @@ CORS(app, resources={
 })
 
 # Configure Gemini API
-GEMINI_API_KEY = "AIzaSyBLi6kgtmc3M9SzZ6aA15tDMmmLcKokQ6s"
+GEMINI_API_KEY = ""
 genai.configure(api_key=GEMINI_API_KEY)
 
 # Initialize models
