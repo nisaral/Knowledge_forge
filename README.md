@@ -16,7 +16,7 @@
 
 KnowledgeForge is a Retrieval-Augmented Generation (RAG) application that empowers users to extract, analyze, and interact with knowledge from diverse sources like web pages, YouTube videos, and custom text. 
 
-Featuring a modern frontend with Three.js 3D particles and glassmorphism design, it integrates a Flask backend with FAISS for vector search and Google's Gemini API for natural language processing. Whether you're summarizing articles, generating mock tests, or visualizing concepts with mind maps and flowcharts, KnowledgeForge is your all-in-one learning companion.
+Featuring a modern frontend with Three.js 3D particles and glassmorphism design, it integrates a Flask backend with FAISS for vector search and Google's Gemini API for natural language processing. Whether you're summarizing articles, generating mock tests, or visualizing concepts with mind maps and flowcharts, KnowledgeForge is your all-in-one learning Companion.
 
 ## ✨ Features
 
