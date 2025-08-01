@@ -1,0 +1,14 @@
+flask
+flask-cors
+gunicorn
+requests
+beautifulsoup4
+youtube-transcript-api
+sentence-transformers
+faiss-cpu
+numpy
+google-generativeai
+scikit-learn
+matplotlib
+seaborn
+pyvis
