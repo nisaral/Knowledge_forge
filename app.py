@@ -28,7 +28,7 @@ app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
 # Load API Key from environment variable. For local dev, you can replace the value.
 # IMPORTANT: Remove hardcoded key before pushing to a public repository.
-GEMINI_API_KEY =("AIzaSyAj9qY_NbobH5D7wkF1QjWWJ0Wb-agLEgI")
+GEMINI_API_KEY =os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
 embedder = SentenceTransformer('all-MiniLM-L6-v2')
