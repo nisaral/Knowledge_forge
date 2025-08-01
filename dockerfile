@@ -16,4 +16,4 @@ EXPOSE 8000
 
 # Set the command to run the app using a production server
 # Ensure GEMINI_API_KEY is set as a Secret in your deployment environment
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "8", "--timeout", "0", "app:app"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "8", "--timeout", "0", "RAG_final:app"]
