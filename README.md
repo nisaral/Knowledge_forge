@@ -28,6 +28,10 @@ Featuring a modern frontend with Three.js 3D particles and glassmorphism design,
 - **🎨 Stunning UI**: 3D particle background with Three.js and glassmorphism design for an immersive experience
 - **⚡ Scalable Backend**: Built with Flask, FAISS for efficient vector retrieval, and Gemini for generation
 
+<img width="1919" height="1029" alt="Screenshot 2025-08-03 123849" src="https://github.com/user-attachments/assets/45cd69e1-33b3-47a9-9ebd-d4e9ce744a22" />
+<img width="1919" height="1031" alt="Screenshot 2025-08-03 123914" src="https://github.com/user-attachments/assets/0c9397cf-1ebb-4ea2-85d9-c0437240c1c1" />
+
+
 ## 🛠️ Tech Stack
 
 | Category | Technologies |
