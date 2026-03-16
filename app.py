@@ -110,8 +110,10 @@ class KnowledgeBase:
         self.chunks = []
         self.index = faiss.IndexFlatIP(self.dim)
         if save:
-            if os.path.exists(KB_FILE):   os.remove(KB_FILE)
-            if os.path.exists(INDEX_FILE): os.remove(INDEX_FILE)
+            if os.path.exists(KB_FILE):
+                os.remove(KB_FILE)
+            if os.path.exists(INDEX_FILE):
+                os.remove(INDEX_FILE)
         print("Knowledge base cleared.")
 
     def add_chunks(self, chunks: list[str], source: str, source_type: str, metadata: dict = None):
@@ -157,14 +159,14 @@ class KnowledgeBase:
             sub_idx = faiss.IndexFlatIP(self.dim)
             sub_idx.add(sub_vecs)
             sem_k = min(TOP_K_COARSE, len(pool_indices))
-            D, I = sub_idx.search(q_vec, sem_k)
-            sem_indices = [pool_indices[i] for i in I[0]]
-            sem_scores  = {pool_indices[i]: float(D[0][j]) for j, i in enumerate(I[0])}
+            distances, result_ids = sub_idx.search(q_vec, sem_k)
+            sem_indices = [pool_indices[i] for i in result_ids[0]]
+            sem_scores = {pool_indices[i]: float(distances[0][j]) for j, i in enumerate(result_ids[0])}
         else:
             sem_k = min(TOP_K_COARSE, self.index.ntotal)
-            D, I = self.index.search(q_vec, sem_k)
-            sem_indices = list(I[0])
-            sem_scores  = {int(I[0][j]): float(D[0][j]) for j in range(len(I[0]))}
+            distances, result_ids = self.index.search(q_vec, sem_k)
+            sem_indices = list(result_ids[0])
+            sem_scores = {int(result_ids[0][j]): float(distances[0][j]) for j in range(len(result_ids[0]))}
 
         # ── BM25 search ───────────────────────────────────────────────────────
         tokenized = [t.lower().split() for t in pool_texts]
@@ -258,8 +260,8 @@ def ingest_pdf_bytes(data: bytes) -> str:
             texts.append(page.get_text("text"))
         raw = "\n".join(texts).strip()
         if len(raw) < 100:
-            # Likely a scanned PDF — use Gemini vision on each page
-            return ingest_pdf_via_gemini(doc)
+            # Likely a scanned PDF — use Gemini fallback
+            return ingest_pdf_via_gemini_bytes(data)
         return raw
     except ImportError:
         return ingest_pdf_via_gemini_bytes(data)
@@ -505,7 +507,7 @@ def chat():
     resp  = model.generate_content(prompt)
     answer = resp.text.strip()
 
-    session['chat_history'].append({"role": "user",      "content": message})
+    session['chat_history'].append({"role": "user", "content": message})
     session['chat_history'].append({"role": "assistant", "content": answer})
     session.modified = True
 
