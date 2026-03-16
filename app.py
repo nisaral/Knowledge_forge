@@ -7,14 +7,14 @@ import base64
 import time
 import tempfile
 import mimetypes
-import numpy as np
-import google.generativeai as genai
 
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+import numpy as np
+import google.generativeai as genai
 import requests
 from flask import Flask, render_template, request, jsonify, session
 from flask_cors import CORS
@@ -669,14 +669,14 @@ def cluster_topics():
     palette = ["#2563eb", "#0891b2", "#059669", "#d97706", "#dc2626"]
     sns.scatterplot(
         x=reduced[:, 0], y=reduced[:, 1],
-        hue=[cluster_labels[l] for l in labels],
+        hue=[cluster_labels[idx] for idx in labels],
         palette=palette[:num_clusters], s=120, alpha=0.85, ax=ax,
         edgecolor='white', linewidth=0.5
     )
     ax.set_title("Content Topic Clusters", fontsize=16, fontweight='bold', color='#1e293b')
     ax.set_xlabel("Component 1", color='#475569')
     ax.set_ylabel("Component 2", color='#475569')
-    legend = ax.legend(title="Topics", bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.legend(title="Topics", bbox_to_anchor=(1.05, 1), loc='upper left')
     fig.tight_layout()
 
     buf = io.BytesIO()

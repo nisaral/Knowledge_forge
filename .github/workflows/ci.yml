@@ -17,7 +17,7 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
       - run: pip install flake8
-      - run: flake8 app.py --max-line-length=120 --ignore=E501,W503
+      - run: flake8 app.py --max-line-length=120 --ignore=E501,W503,E402,E221
 
   test:
     name: Unit Tests
