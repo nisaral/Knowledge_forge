@@ -1,9 +1,10 @@
-"""
-Unit tests for Knowledge Forge V2 API.
-Uses Flask test client with mocked Gemini API calls.
-"""
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import json
 import pytest
+import numpy as np
 from unittest.mock import patch, MagicMock
 
 
@@ -50,7 +51,8 @@ class TestHealthEndpoints:
 class TestContentIngestion:
     def test_add_text_content(self, client):
         c, _ = client
-        with patch("app.gemini_embed", return_value=[[0.0]*768]), \
+        mock_vec = np.array([[0.0]*768], dtype=np.float32)
+        with patch("app.gemini_embed", return_value=mock_vec), \
              patch("google.generativeai.embed_content", return_value={"embedding": [[0.0]*768]}):
             r = c.post("/api/add-content",
                        data=json.dumps({"source": "Hello world test content " * 20,
