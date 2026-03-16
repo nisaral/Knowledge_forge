@@ -1,370 +1,435 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KnowledgeForge - AI Learning Assistant</title>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-    <style>
-        :root {
-            --primary: #5e35b1; --primary-light: #7c51d1; --secondary: #00bcd4;
-            --dark: #1a1a2e; --light: #f5f5f5; --surface: #2c2c54;
-            --success: #4caf50; --error: #f44336;
-        }
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', sans-serif; }
-        body { background-color: var(--dark); color: var(--light); overflow-x: hidden; }
-        #canvas-container { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.8; }
-        .container { max-width: 1300px; margin: 0 auto; padding: 30px; position: relative; z-index: 1; }
-        .glass-panel { background: rgba(44, 44, 84, 0.5); backdrop-filter: blur(15px); border-radius: 20px; border: 1px solid rgba(255, 255, 255, 0.1); padding: 30px; margin-bottom: 30px; }
-        header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; }
-        .logo { display: flex; align-items: center; font-weight: 700; font-size: 28px; color: var(--secondary); text-shadow: 0 0 10px var(--secondary); }
-        .logo i { margin-right: 15px; font-size: 36px; }
-        .app-layout { display: grid; grid-template-columns: 1fr 2fr; gap: 30px; }
-        h2 { margin-bottom: 25px; color: var(--secondary); font-size: 24px; display: flex; align-items: center; }
-        h2 i { margin-right: 12px; }
-        .input-group { margin-bottom: 25px; }
-        label { display: block; margin-bottom: 10px; font-weight: 500; color: #e0e0e0; }
-        input, textarea, select { width: 100%; padding: 14px 18px; background: rgba(26, 26, 46, 0.7); border: 1px solid rgba(255, 255, 255, 0.2); border-radius: 10px; color: var(--light); font-size: 16px; }
-        input:focus, textarea:focus, select:focus { outline: none; border-color: var(--secondary); box-shadow: 0 0 10px rgba(0, 188, 212, 0.5); }
-        button { background: var(--primary); color: white; border: none; padding: 14px 30px; border-radius: 10px; cursor: pointer; font-weight: 600; font-size: 16px; transition: all 0.3s ease; display: inline-flex; align-items: center; justify-content: center; }
-        button:hover { background: var(--primary-light); transform: translateY(-3px); }
-        button i { margin-right: 10px; }
-        .tabs { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 25px; }
-        .tab { padding: 12px 20px; background: rgba(255, 255, 255, 0.05); border-radius: 10px; cursor: pointer; transition: all 0.3s ease; }
-        .tab.active { background: var(--primary); color: white; }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        .result-card { background: rgba(26, 26, 46, 0.7); border-radius: 15px; padding: 25px; margin-bottom: 20px; border-left: 5px solid var(--secondary); }
-        .result-card h3 { margin-bottom: 15px; color: var(--secondary); font-size: 20px; }
-        .result-content { white-space: pre-wrap; word-wrap: break-word; line-height: 1.6; }
-        .sources-list { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
-        .source-pill { background: rgba(94, 53, 177, 0.3); padding: 8px 18px; border-radius: 20px; font-size: 14px; }
-        .notification { position: fixed; bottom: 30px; right: 30px; color: white; padding: 15px 30px; border-radius: 10px; box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3); transform: translateY(100px); opacity: 0; transition: all 0.3s ease; z-index: 1000; }
-        .notification.show { transform: translateY(0); opacity: 1; }
-        .notification.success { background: var(--success); }
-        .notification.error { background: var(--error); }
-        .loading-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.7); display: none; justify-content: center; align-items: center; z-index: 1000; }
-        .loading-overlay.active { display: flex; }
-        .spinner { width: 60px; height: 60px; border: 5px solid rgba(255, 255, 255, 0.3); border-radius: 50%; border-top-color: var(--secondary); animation: spin 1s ease-in-out infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .mermaid { background: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; overflow-x: auto; text-align: center; }
-        .storyboard-container { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-top: 20px; }
-        .storyboard-panel { background: rgba(255, 255, 255, 0.05); border-radius: 10px; padding: 20px; text-align: center; border: 1px solid var(--secondary); }
-        .storyboard-panel i { font-size: 48px; color: var(--secondary); margin-bottom: 15px; }
-        .entity-container { margin-top: 15px; }
-        .entity-group { margin-bottom: 15px; }
-        .entity-group h4 { color: var(--secondary); margin-bottom: 10px; border-bottom: 1px solid var(--secondary); padding-bottom: 5px; }
-        .entity-pill { display: inline-block; background: rgba(0, 188, 212, 0.2); padding: 5px 12px; border-radius: 15px; margin: 3px; font-size: 14px; }
-        .plot-container img { max-width: 100%; border-radius: 10px; background: white; padding: 5px; }
-        @media (max-width: 768px) { .app-layout { grid-template-columns: 1fr; } .container { padding: 20px; } }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KnowledgeForge V2 — AI Learning Companion</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+:root {
+  --primary:#2563eb; --primary-dark:#1d4ed8; --primary-light:#eff6ff;
+  --accent:#0891b2; --success:#059669; --error:#dc2626; --warn:#d97706;
+  --bg:#f8fafc; --surface:#ffffff; --border:#e2e8f0;
+  --text:#1e293b; --muted:#64748b; --subtle:#f1f5f9;
+  --shadow:0 1px 3px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.06);
+  --shadow-lg:0 8px 32px rgba(37,99,235,.12);
+  --radius:12px; --radius-sm:8px;
+}
+*{margin:0;padding:0;box-sizing:border-box;font-family:'Inter',sans-serif}
+body{background:var(--bg);color:var(--text);min-height:100vh}
+
+/* ─── Header ──────────────────────────────── */
+.header{background:linear-gradient(135deg,var(--primary) 0%,#1e40af 50%,var(--accent) 100%);
+  padding:0 32px;height:64px;display:flex;align-items:center;justify-content:space-between;
+  box-shadow:0 2px 12px rgba(37,99,235,.3);position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:10px;color:#fff;font-weight:700;font-size:20px}
+.logo i{font-size:22px}
+.logo .badge{background:rgba(255,255,255,.25);padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.5px}
+.header-actions{display:flex;gap:10px}
+.btn-clear{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;
+  padding:8px 16px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;font-weight:500;
+  display:flex;align-items:center;gap:6px;transition:all .2s}
+.btn-clear:hover{background:rgba(255,255,255,.25)}
+
+/* ─── Layout ──────────────────────────────── */
+.layout{display:grid;grid-template-columns:340px 1fr;gap:0;height:calc(100vh - 64px)}
+
+/* ─── Sidebar ─────────────────────────────── */
+.sidebar{background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column}
+.sidebar-section{padding:20px;border-bottom:1px solid var(--border)}
+.sidebar-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:14px;display:flex;align-items:center;gap:6px}
+
+/* ─── Tabs ────────────────────────────────── */
+.tab-bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.tab{padding:6px 12px;border-radius:20px;cursor:pointer;font-size:12px;font-weight:500;
+  background:var(--subtle);color:var(--muted);border:1px solid transparent;transition:all .2s}
+.tab.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.tab-panel{display:none}.tab-panel.active{display:block}
+
+/* ─── Form Elements ───────────────────────── */
+.field{margin-bottom:12px}
+.field label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-bottom:5px}
+input[type=text],input[type=url],textarea,select{
+  width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);
+  font-size:13px;color:var(--text);background:var(--surface);transition:border .2s}
+input:focus,textarea:focus,select:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+textarea{resize:vertical;min-height:80px}
+
+/* Drop zone */
+.drop-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:24px;text-align:center;
+  cursor:pointer;transition:all .2s;background:var(--subtle)}
+.drop-zone:hover,.drop-zone.drag-over{border-color:var(--primary);background:var(--primary-light)}
+.drop-zone i{font-size:28px;color:var(--muted);margin-bottom:8px;display:block}
+.drop-zone .dz-label{font-size:13px;color:var(--muted);font-weight:500}
+.drop-zone .dz-sub{font-size:11px;color:var(--muted);margin-top:4px}
+.progress-bar-wrap{margin-top:10px;display:none}
+.progress-bar{height:4px;background:var(--border);border-radius:4px;overflow:hidden}
+.progress-bar-fill{height:100%;background:var(--primary);width:0%;transition:width .3s;border-radius:4px}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:var(--radius-sm);
+  font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .2s}
+.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-dark);transform:translateY(-1px)}
+.btn-secondary{background:var(--subtle);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--border)}
+.btn-sm{padding:6px 12px;font-size:12px}
+.btn-block{width:100%;justify-content:center}
+
+/* Source chips */
+.source-chips{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto}
+.source-chip{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--subtle);
+  border-radius:var(--radius-sm);font-size:12px;border:1px solid var(--border)}
+.source-chip .chip-icon{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;flex-shrink:0}
+.chip-web{background:#2563eb}.chip-youtube{background:#dc2626}.chip-pdf{background:#d97706}
+.chip-audio{background:#059669}.chip-video{background:#7c3aed}.chip-image{background:#0891b2}.chip-text{background:#64748b}
+.chip-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
+
+/* ─── Main Panel ──────────────────────────── */
+.main{display:flex;flex-direction:column;overflow:hidden}
+.tools-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px}
+.tools-tabs{display:flex;gap:4px;flex-wrap:wrap}
+.tool-tab{padding:7px 14px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;font-weight:500;
+  color:var(--muted);background:transparent;border:1px solid transparent;transition:all .2s;display:flex;align-items:center;gap:5px}
+.tool-tab.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+.tool-tab:hover:not(.active){background:var(--subtle);color:var(--text)}
+
+.tool-panel{display:none;padding:16px 24px;background:var(--surface);border-bottom:1px solid var(--border)}
+.tool-panel.active{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.tool-panel .field{margin-bottom:0;min-width:200px;flex:1}
+.tool-panel select{min-width:150px}
+
+/* Results */
+.results{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px}
+.result-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  box-shadow:var(--shadow);overflow:hidden}
+.result-card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.result-card-title{font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px}
+.result-card-title i{color:var(--primary)}
+.result-card-actions{display:flex;gap:6px}
+.icon-btn{background:var(--subtle);border:1px solid var(--border);width:28px;height:28px;border-radius:6px;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);transition:all .2s}
+.icon-btn:hover{background:var(--primary-light);color:var(--primary);border-color:var(--primary)}
+.result-card-body{padding:20px}
+
+/* Markdown-style content */
+.md-content{font-size:14px;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word}
+.md-content h1,.md-content h2,.md-content h3{font-weight:600;margin:12px 0 6px;color:var(--text)}
+.md-content p{margin-bottom:8px}
+.md-content ul,.md-content ol{padding-left:20px;margin-bottom:8px}
+.md-content code{background:var(--subtle);padding:2px 6px;border-radius:4px;font-size:12px;font-family:monospace}
+.md-content strong{font-weight:600}
+
+/* Welcome card */
+.welcome-card{background:linear-gradient(135deg,var(--primary-light),#e0f2fe);border:1px solid #bfdbfe;border-radius:var(--radius);padding:28px;text-align:center}
+.welcome-card h2{font-size:20px;color:var(--primary-dark);margin-bottom:8px}
+.welcome-card p{color:var(--muted);font-size:14px}
+.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:20px}
+.feature-item{background:var(--surface);border-radius:var(--radius-sm);padding:14px;text-align:center;border:1px solid var(--border)}
+.feature-item i{font-size:20px;color:var(--primary);display:block;margin-bottom:6px}
+.feature-item span{font-size:12px;color:var(--muted);font-weight:500}
+
+/* Mermaid */
+.mermaid-wrap{background:var(--subtle);border-radius:var(--radius-sm);padding:16px;overflow-x:auto;text-align:center}
+
+/* Flashcards */
+.flashcard-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.flashcard{perspective:600px;height:140px;cursor:pointer}
+.flashcard-inner{position:relative;width:100%;height:100%;transition:transform .5s;transform-style:preserve-3d}
+.flashcard.flipped .flashcard-inner{transform:rotateY(180deg)}
+.flashcard-front,.flashcard-back{position:absolute;inset:0;backface-visibility:hidden;border-radius:var(--radius-sm);
+  display:flex;align-items:center;justify-content:center;padding:16px;text-align:center;font-size:13px;font-weight:500;border:1px solid var(--border)}
+.flashcard-front{background:var(--primary);color:#fff}
+.flashcard-back{background:var(--surface);color:var(--text);transform:rotateY(180deg)}
+.fc-hint{font-size:10px;font-weight:400;opacity:.75;margin-top:6px;display:block}
+
+/* Storyboard */
+.storyboard-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.storyboard-panel{background:var(--subtle);border:1px solid var(--border);border-radius:var(--radius-sm);padding:18px;text-align:center}
+.storyboard-panel i{font-size:36px;color:var(--primary);display:block;margin-bottom:10px}
+.storyboard-panel p{font-size:13px;color:var(--text);line-height:1.5}
+.storyboard-panel .panel-num{font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+
+/* Entity pills */
+.entity-group{margin-bottom:14px}
+.entity-group h4{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.entity-pill{display:inline-block;background:var(--primary-light);color:var(--primary-dark);padding:4px 10px;border-radius:12px;font-size:12px;font-weight:500;margin:3px;border:1px solid #bfdbfe}
+
+/* Chat */
+.chat-messages{display:flex;flex-direction:column;gap:12px;padding:20px;min-height:200px;max-height:400px;overflow-y:auto;background:var(--subtle);border-radius:var(--radius-sm)}
+.chat-msg{max-width:80%;padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;line-height:1.5}
+.chat-msg.user{background:var(--primary);color:#fff;align-self:flex-end;border-bottom-right-radius:3px}
+.chat-msg.assistant{background:var(--surface);color:var(--text);align-self:flex-start;border:1px solid var(--border);border-bottom-left-radius:3px}
+.chat-input-row{display:flex;gap:8px;padding:12px 20px;border-top:1px solid var(--border)}
+.chat-input-row input{flex:1}
+
+/* Plot */
+.plot-img{max-width:100%;border-radius:var(--radius-sm);border:1px solid var(--border)}
+
+/* Notification */
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:var(--radius-sm);
+  color:#fff;font-size:13px;font-weight:500;box-shadow:0 4px 20px rgba(0,0,0,.15);
+  transform:translateY(80px);opacity:0;transition:all .3s;z-index:999;display:flex;align-items:center;gap:8px}
+.toast.show{transform:translateY(0);opacity:1}
+.toast.success{background:var(--success)}.toast.error{background:var(--error)}
+
+/* Loading */
+.overlay{position:fixed;inset:0;background:rgba(248,250,252,.8);backdrop-filter:blur(4px);
+  display:none;align-items:center;justify-content:center;z-index:200;flex-direction:column;gap:14px}
+.overlay.active{display:flex}
+.spinner{width:44px;height:44px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
+.overlay-text{font-size:13px;color:var(--muted);font-weight:500}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Responsive */
+@media(max-width:768px){
+  .layout{grid-template-columns:1fr;height:auto}
+  .sidebar{max-height:50vh}
+  .feature-grid{grid-template-columns:repeat(2,1fr)}
+  .storyboard-grid{grid-template-columns:1fr}
+}
+</style>
 </head>
 <body>
-    <div id="canvas-container"></div>
-    <div class="container">
-        <header class="glass-panel">
-            <div class="logo"><i class="fas fa-brain"></i><span>KnowledgeForge</span></div>
-            <button id="clear-data-button"><i class="fas fa-trash"></i> Clear Data</button>
-        </header>
-        <div class="app-layout">
-            <div class="glass-panel">
-                <h2><i class="fas fa-database"></i> Knowledge Sources</h2>
-                <div class="tabs" id="source-tabs">
-                    <div class="tab active" data-tab="web">Web URL</div>
-                    <div class="tab" data-tab="youtube">YouTube</div>
-                    <div class="tab" data-tab="text">Custom Text</div>
-                </div>
-                <div class="tab-content active" id="web-tab">
-                    <div class="input-group"><label for="web-url">Enter URL:</label><input type="url" id="web-url" placeholder="https://example.com/article"></div>
-                    <button class="add-content-button" data-type="web"><i class="fas fa-globe"></i> Add Web Content</button>
-                </div>
-                <div class="tab-content" id="youtube-tab">
-                    <div class="input-group"><label for="youtube-url">Enter YouTube URL:</label><input type="url" id="youtube-url" placeholder="https://www.youtube.com/watch?v=..."></div>
-                    <button class="add-content-button" data-type="youtube"><i class="fab fa-youtube"></i> Add Video Content</button>
-                </div>
-                <div class="tab-content" id="text-tab">
-                    <div class="input-group"><label for="custom-text">Enter content:</label><textarea id="custom-text" rows="5" placeholder="Paste content..."></textarea></div>
-                    <button class="add-content-button" data-type="text"><i class="fas fa-file-alt"></i> Add Text Content</button>
-                </div>
-                <h3>Active Sources</h3>
-                <div id="sources-list" class="sources-list"></div>
-            </div>
-            <div>
-                <div class="glass-panel">
-                    <h2><i class="fas fa-tools"></i> Learning & Analysis Tools</h2>
-                    <div class="tabs" id="tool-tabs">
-                        <div class="tab active" data-tab="qna">Q&A</div><div class="tab" data-tab="mock_test">Mock Test</div>
-                        <div class="tab" data-tab="mindmap">Mind Map</div><div class="tab" data-tab="flowchart">Flowchart</div>
-                        <div class="tab" data-tab="storyboard">Storyboard</div><div class="tab" data-tab="entities">Entities</div>
-                        <div class="tab" data-tab="topics">Topics</div>
-                    </div>
-                    <div class="tab-content active" id="qna-tab">
-                        <div class="input-group"><label for="qna-topic">Ask a question:</label><input type="text" id="qna-topic" placeholder="e.g., What is the main idea?"></div>
-                        <div class="input-group"><label for="qna-source">Source (optional):</label><select id="qna-source" class="source-dropdown"></select></div>
-                        <button class="tool-button" data-tool="qna"><i class="fas fa-search"></i> Get Answer</button>
-                    </div>
-                    <div class="tab-content" id="mock_test-tab">
-                        <div class="input-group"><label for="mock_test-topic">Test topic:</label><input type="text" id="mock_test-topic" placeholder="e.g., Machine Learning"></div>
-                        <div class="input-group"><label for="mock_test-source">Source (optional):</label><select id="mock_test-source" class="source-dropdown"></select></div>
-                        <button class="tool-button" data-tool="mock_test"><i class="fas fa-clipboard-check"></i> Create Mock Test</button>
-                    </div>
-                    <div class="tab-content" id="mindmap-tab">
-                        <div class="input-group"><label for="mindmap-topic">Mind map topic:</label><input type="text" id="mindmap-topic" placeholder="e.g., Project Lifecycle"></div>
-                        <div class="input-group"><label for="mindmap-source">Source (optional):</label><select id="mindmap-source" class="source-dropdown"></select></div>
-                        <button class="tool-button" data-tool="mindmap"><i class="fas fa-project-diagram"></i> Create Mind Map</button>
-                    </div>
-                    <div class="tab-content" id="flowchart-tab">
-                        <div class="input-group"><label for="flowchart-topic">Flowchart process:</label><input type="text" id="flowchart-topic" placeholder="e.g., Data Processing"></div>
-                        <div class="input-group"><label for="flowchart-source">Source (optional):</label><select id="flowchart-source" class="source-dropdown"></select></div>
-                        <button class="tool-button" data-tool="flowchart"><i class="fas fa-sitemap"></i> Create Flowchart</button>
-                    </div>
-                    <div class="tab-content" id="storyboard-tab">
-                        <div class="input-group"><label for="storyboard-topic">Storyboard topic:</label><input type="text" id="storyboard-topic" placeholder="e.g., User Journey"></div>
-                        <div class="input-group"><label for="storyboard-source">Source (optional):</label><select id="storyboard-source" class="source-dropdown"></select></div>
-                        <button class="tool-button" data-tool="storyboard"><i class="fas fa-film"></i> Create Storyboard</button>
-                    </div>
-                    <div class="tab-content" id="entities-tab">
-                        <p>Extract key people, organizations, and locations from your content.</p>
-                        <div class="input-group"><label for="entities-source">Source (optional):</label><select id="entities-source" class="source-dropdown"></select></div>
-                        <button id="extract-entities-button"><i class="fas fa-tags"></i> Extract Entities</button>
-                    </div>
-                    <div class="tab-content" id="topics-tab">
-                        <p>Cluster all your content into topics and visualize the relationships.</p>
-                        <button id="cluster-topics-button"><i class="fas fa-chart-pie"></i> Analyze Topics</button>
-                    </div>
-                </div>
-                <div class="glass-panel results-area">
-                    <h2><i class="fas fa-lightbulb"></i> Results</h2>
-                    <div id="results-container">
-                        <div class="result-card"><h3>Welcome to KnowledgeForge</h3><p class="result-content">Start by adding content from the web, YouTube, or text. Then, use the tools above to analyze and learn from it.</p></div>
-                    </div>
-                </div>
-            </div>
+
+<!-- Header -->
+<header class="header">
+  <div class="logo">
+    <i class="fas fa-brain"></i>
+    KnowledgeForge
+    <span class="badge">V2</span>
+  </div>
+  <div class="header-actions">
+    <button class="btn-clear" id="clearBtn"><i class="fas fa-trash-alt"></i> Clear Data</button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <!-- ── Sidebar ─────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- Source Type Tabs -->
+    <div class="sidebar-section">
+      <div class="sidebar-title"><i class="fas fa-plus-circle"></i> Add Knowledge</div>
+      <div class="tab-bar" id="src-tabs">
+        <div class="tab active" data-tab="web">🌐 Web</div>
+        <div class="tab" data-tab="youtube">▶ YouTube</div>
+        <div class="tab" data-tab="text">📝 Text</div>
+        <div class="tab" data-tab="pdf">📄 PDF</div>
+        <div class="tab" data-tab="audio">🎵 Audio</div>
+        <div class="tab" data-tab="image">🖼 Image</div>
+        <div class="tab" data-tab="video">🎬 Video</div>
+      </div>
+
+      <!-- Web -->
+      <div class="tab-panel active" id="web-panel">
+        <div class="field"><label>Web URL</label><input type="url" id="web-url" placeholder="https://example.com/article"></div>
+        <button class="btn btn-primary btn-block add-text-btn" data-type="web"><i class="fas fa-globe"></i> Add Web Content</button>
+      </div>
+
+      <!-- YouTube -->
+      <div class="tab-panel" id="youtube-panel">
+        <div class="field"><label>YouTube URL</label><input type="url" id="yt-url" placeholder="https://youtube.com/watch?v=..."></div>
+        <button class="btn btn-primary btn-block add-text-btn" data-type="youtube"><i class="fab fa-youtube"></i> Add Video Transcript</button>
+      </div>
+
+      <!-- Text -->
+      <div class="tab-panel" id="text-panel">
+        <div class="field"><label>Paste Text</label><textarea id="custom-text" placeholder="Paste notes, articles, content..."></textarea></div>
+        <button class="btn btn-primary btn-block add-text-btn" data-type="text"><i class="fas fa-file-alt"></i> Add Text</button>
+      </div>
+
+      <!-- PDF -->
+      <div class="tab-panel" id="pdf-panel">
+        <div class="drop-zone" id="pdf-drop" data-accept=".pdf,application/pdf">
+          <i class="fas fa-file-pdf"></i>
+          <div class="dz-label">Drop PDF here or click to browse</div>
+          <div class="dz-sub">Supports text & scanned PDFs</div>
+          <input type="file" accept=".pdf" style="display:none" id="pdf-input">
         </div>
+        <div class="progress-bar-wrap" id="pdf-progress"><div class="progress-bar"><div class="progress-bar-fill" id="pdf-fill"></div></div></div>
+      </div>
+
+      <!-- Audio -->
+      <div class="tab-panel" id="audio-panel">
+        <div class="drop-zone" id="audio-drop">
+          <i class="fas fa-microphone-alt"></i>
+          <div class="dz-label">Drop audio lecture here</div>
+          <div class="dz-sub">MP3, WAV, M4A, OGG</div>
+          <input type="file" accept=".mp3,.wav,.m4a,.ogg,audio/*" style="display:none" id="audio-input">
+        </div>
+        <div class="progress-bar-wrap" id="audio-progress"><div class="progress-bar"><div class="progress-bar-fill" id="audio-fill"></div></div></div>
+      </div>
+
+      <!-- Image -->
+      <div class="tab-panel" id="image-panel">
+        <div class="drop-zone" id="image-drop">
+          <i class="fas fa-image"></i>
+          <div class="dz-label">Drop image/screenshot here</div>
+          <div class="dz-sub">JPG, PNG, WEBP, GIF</div>
+          <input type="file" accept=".jpg,.jpeg,.png,.gif,.webp,image/*" style="display:none" id="image-input">
+        </div>
+        <div class="progress-bar-wrap" id="image-progress"><div class="progress-bar"><div class="progress-bar-fill" id="image-fill"></div></div></div>
+      </div>
+
+      <!-- Video -->
+      <div class="tab-panel" id="video-panel">
+        <div class="drop-zone" id="video-drop">
+          <i class="fas fa-video"></i>
+          <div class="dz-label">Drop lecture video here</div>
+          <div class="dz-sub">MP4, WEBM, MOV</div>
+          <input type="file" accept=".mp4,.webm,.mov,video/*" style="display:none" id="video-input">
+        </div>
+        <div class="progress-bar-wrap" id="video-progress"><div class="progress-bar"><div class="progress-bar-fill" id="video-fill"></div></div></div>
+      </div>
     </div>
-    <div class="notification" id="notification"></div>
-    <div class="loading-overlay" id="loading-overlay"><div class="spinner"></div></div>
 
-    <script>
-        // --- 3D Particle Background (No changes) ---
-        const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        document.getElementById('canvas-container').appendChild(renderer.domElement);
-        const particlesGeometry = new THREE.BufferGeometry();
-        const posArray = new Float32Array(1500 * 3);
-        for (let i = 0; i < 1500 * 3; i++) { posArray[i] = (Math.random() - 0.5) * 15; }
-        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-        const particlesMesh = new THREE.Points(particlesGeometry, new THREE.PointsMaterial({ size: 0.03, color: 0x00bcd4 }));
-        scene.add(particlesMesh);
-        camera.position.z = 5;
-        const animate = () => { requestAnimationFrame(animate); particlesMesh.rotation.y += 0.0008; renderer.render(scene, camera); };
-        animate();
-        window.addEventListener('resize', () => { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+    <!-- Active Sources -->
+    <div class="sidebar-section" style="flex:1">
+      <div class="sidebar-title"><i class="fas fa-database"></i> Knowledge Sources</div>
+      <div class="source-chips" id="source-chips">
+        <div style="font-size:12px;color:var(--muted);text-align:center;padding:10px 0">No sources added yet</div>
+      </div>
+    </div>
 
-        // --- Core Application Logic ---
-        document.addEventListener('DOMContentLoaded', () => {
-            // Using a relative URL is best for deployment
-            const API_URL = '/api'; 
-            const notificationEl = document.getElementById('notification');
-            const loadingOverlay = document.getElementById('loading-overlay');
-            const resultsContainer = document.getElementById('results-container');
+  </aside>
 
-            const showNotification = (message, isError = false) => {
-                notificationEl.textContent = message;
-                notificationEl.className = `notification show ${isError ? 'error' : 'success'}`;
-                setTimeout(() => notificationEl.classList.remove('show'), 3000);
-            };
+  <!-- ── Main ──────────────────────────────────────────────── -->
+  <main class="main">
 
-            const toggleLoading = (show) => loadingOverlay.classList.toggle('active', show);
+    <!-- Tool Bar -->
+    <div class="tools-bar">
+      <div class="tools-tabs" id="tool-tabs">
+        <div class="tool-tab active" data-tool="qna"><i class="fas fa-question-circle"></i> Q&amp;A</div>
+        <div class="tool-tab" data-tool="chat"><i class="fas fa-comments"></i> Chat</div>
+        <div class="tool-tab" data-tool="summarize"><i class="fas fa-align-left"></i> Summarize</div>
+        <div class="tool-tab" data-tool="flashcards"><i class="fas fa-clone"></i> Flashcards</div>
+        <div class="tool-tab" data-tool="study_plan"><i class="fas fa-calendar-check"></i> Study Plan</div>
+        <div class="tool-tab" data-tool="mock_test"><i class="fas fa-clipboard-list"></i> Mock Test</div>
+        <div class="tool-tab" data-tool="mindmap"><i class="fas fa-project-diagram"></i> Mind Map</div>
+        <div class="tool-tab" data-tool="flowchart"><i class="fas fa-sitemap"></i> Flowchart</div>
+        <div class="tool-tab" data-tool="storyboard"><i class="fas fa-film"></i> Storyboard</div>
+        <div class="tool-tab" data-tool="entities"><i class="fas fa-tags"></i> Entities</div>
+        <div class="tool-tab" data-tool="topics"><i class="fas fa-chart-scatter"></i> Topics</div>
+      </div>
+    </div>
 
-            const updateSources = async () => {
-                try {
-                    const response = await fetch(`${API_URL}/get-sources`);
-                    const data = await response.json();
-                    if (data.success) {
-                        const sourcesList = document.getElementById('sources-list');
-                        sourcesList.innerHTML = data.sources.length ? data.sources.map(s => `<div class="source-pill">${s.length > 50 ? s.substring(0,47)+'...' : s}</div>`).join('') : '<div class="source-pill">No sources added</div>';
-                        const dropdowns = document.querySelectorAll('.source-dropdown');
-                        dropdowns.forEach(dd => {
-                            const currentVal = dd.value;
-                            dd.innerHTML = '<option value="">All Sources</option>' + data.sources.map(s => `<option value="${s}">${s.length > 40 ? s.substring(0,37)+'...' : s}</option>`).join('');
-                            dd.value = currentVal;
-                        });
-                    }
-                } catch (e) { console.error("Failed to fetch sources:", e); }
-            };
+    <!-- Tool Input Panels -->
+    <div id="tool-inputs">
 
-            // --- MERMAID RENDERING FIX ---
-            async function renderMermaidDiagram(title, mermaidCode) {
-                const card = document.createElement('div');
-                card.className = 'result-card';
-                card.innerHTML = `<h3>${title}</h3>`;
-                const contentDiv = document.createElement('div');
-                contentDiv.className = 'mermaid';
-                
-                try {
-                    // Use mermaid.render to generate SVG first
-                    const { svg } = await mermaid.render(`mermaid-graph-${Date.now()}`, mermaidCode);
-                    contentDiv.innerHTML = svg;
-                } catch (error) {
-                    console.error("Mermaid rendering failed:", error);
-                    contentDiv.innerHTML = `<p style="color:var(--error);">Error rendering diagram. The AI may have generated invalid syntax.</p><pre>${mermaidCode}</pre>`;
-                }
-                
-                card.appendChild(contentDiv);
-                resultsContainer.prepend(card);
-            }
+      <!-- Q&A -->
+      <div class="tool-panel active" id="tp-qna">
+        <div class="field"><label>Your Question</label><input type="text" id="qna-q" placeholder="Ask anything about your content..."></div>
+        <div class="field"><label>Source</label><select class="src-filter" id="qna-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="qna"><i class="fas fa-search"></i> Ask</button>
+      </div>
 
-            const addResultCard = (title, content, type = 'text') => {
-                if (type === 'mermaid') {
-                    // Use the new, robust rendering function
-                    renderMermaidDiagram(title, content);
-                    return;
-                }
+      <!-- Chat -->
+      <div class="tool-panel" id="tp-chat">
+        <div class="field"><label>Source</label><select class="src-filter" id="chat-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-secondary btn-sm" id="clearChatBtn"><i class="fas fa-broom"></i> Clear History</button>
+      </div>
 
-                const card = document.createElement('div');
-                card.className = 'result-card';
-                card.innerHTML = `<h3>${title}</h3>`;
-                const contentDiv = document.createElement('div');
-                contentDiv.className = 'result-content';
+      <!-- Summarize -->
+      <div class="tool-panel" id="tp-summarize">
+        <div class="field"><label>Source (optional)</label><select class="src-filter" id="sum-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="summarize"><i class="fas fa-align-left"></i> Summarize</button>
+      </div>
 
-                if (type === 'storyboard') {
-                    contentDiv.className = 'storyboard-container';
-                    content.forEach(panel => {
-                        const panelDiv = document.createElement('div');
-                        panelDiv.className = 'storyboard-panel';
-                        panelDiv.innerHTML = `<i class="${panel.icon || 'fas fa-image'}"></i><p>${panel.scene}</p>`;
-                        contentDiv.appendChild(panelDiv);
-                    });
-                } else if (type === 'entities') {
-                    contentDiv.className = 'entity-container';
-                    let hasEntities = false;
-                    for (const [category, list] of Object.entries(content)) {
-                        if (list.length > 0) {
-                            hasEntities = true;
-                            const groupDiv = document.createElement('div');
-                            groupDiv.className = 'entity-group';
-                            groupDiv.innerHTML = `<h4>${category}</h4>` + list.map(item => `<span class="entity-pill">${item}</span>`).join('');
-                            contentDiv.appendChild(groupDiv);
-                        }
-                    }
-                    if (!hasEntities) contentDiv.innerHTML = "<p>No entities were found in the selected content.</p>";
-                } else if (type === 'plot') {
-                    contentDiv.className = 'plot-container';
-                    contentDiv.innerHTML = `<img src="${content}" alt="Topic Cluster Plot"/>`;
-                } else {
-                    contentDiv.innerHTML = content.replace(/\n/g, '<br>');
-                }
-                card.appendChild(contentDiv);
-                resultsContainer.prepend(card);
-            };
-            
-            // Tab switching logic
-            const setupTabs = (containerId) => {
-                const container = document.getElementById(containerId);
-                container.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('tab')) {
-                        const tabName = e.target.dataset.tab;
-                        container.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-                        e.target.classList.add('active');
-                        const contentTabs = container.nextElementSibling.id.includes('tab') 
-                            ? container.parentElement.querySelectorAll(`:scope > .tab-content`)
-                            : document.querySelectorAll(`.tab-content`);
+      <!-- Flashcards -->
+      <div class="tool-panel" id="tp-flashcards">
+        <div class="field"><label>Topic</label><input type="text" id="fc-topic" placeholder="e.g., Neural Networks"></div>
+        <div class="field"><label>Source</label><select class="src-filter" id="fc-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="tool" data-tool="flashcards"><i class="fas fa-clone"></i> Generate</button>
+      </div>
 
-                        contentTabs.forEach(c => {
-                            if(c.id === `${tabName}-tab`){
-                                c.classList.add('active');
-                            } else {
-                                c.classList.remove('active');
-                            }
-                        });
-                    }
-                });
-            };
-            setupTabs('source-tabs');
-            setupTabs('tool-tabs');
+      <!-- Study Plan -->
+      <div class="tool-panel" id="tp-study_plan">
+        <div class="field"><label>Topic / Goal</label><input type="text" id="study_plan-topic" placeholder="e.g., Learn Python in 4 weeks"></div>
+        <div class="field"><label>Source</label><select class="src-filter" id="study_plan-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="tool" data-tool="study_plan"><i class="fas fa-calendar-check"></i> Generate Plan</button>
+      </div>
 
-            // Event listeners for adding content
-            document.querySelectorAll('.add-content-button').forEach(button => {
-                button.addEventListener('click', async () => {
-                    const type = button.dataset.type;
-                    const input = document.getElementById(type === 'text' ? 'custom-text' : `${type}-url`);
-                    const source = input.value.trim();
-                    if (!source) return showNotification('Please provide input.', true);
+      <!-- Mock Test -->
+      <div class="tool-panel" id="tp-mock_test">
+        <div class="field"><label>Topic</label><input type="text" id="mock_test-topic" placeholder="e.g., Machine Learning"></div>
+        <div class="field"><label>Source</label><select class="src-filter" id="mock_test-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="tool" data-tool="mock_test"><i class="fas fa-clipboard-list"></i> Create Test</button>
+      </div>
 
-                    toggleLoading(true);
-                    try {
-                        const response = await fetch(`${API_URL}/add-content`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source, source_type: type }) });
-                        const data = await response.json();
-                        showNotification(data.message, !data.success);
-                        if (data.success) { input.value = ''; updateSources(); }
-                    } catch (e) { showNotification('An error occurred.', true); } finally { toggleLoading(false); }
-                });
-            });
+      <!-- Mind Map -->
+      <div class="tool-panel" id="tp-mindmap">
+        <div class="field"><label>Topic</label><input type="text" id="mindmap-topic" placeholder="e.g., Deep Learning"></div>
+        <div class="field"><label>Source</label><select class="src-filter" id="mindmap-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="tool" data-tool="mindmap"><i class="fas fa-project-diagram"></i> Create Map</button>
+      </div>
 
-            // Event listeners for tools
-            document.querySelectorAll('.tool-button').forEach(button => {
-                button.addEventListener('click', async () => {
-                    const tool = button.dataset.tool;
-                    const topic = document.getElementById(`${tool}-topic`).value.trim();
-                    const source = document.getElementById(`${tool}-source`).value;
-                    if (!topic) return showNotification('Please enter a topic or question.', true);
-                    
-                    toggleLoading(true);
-                    const endpoint = tool === 'qna' ? 'ask-question' : 'generate-tool-content';
-                    const payload = tool === 'qna' ? { question: topic, source } : { tool, topic, source };
-                    
-                    try {
-                        const response = await fetch(`${API_URL}/${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-                        const data = await response.json();
-                        if (data.success) {
-                            if (data.type === 'mindmap' || data.type === 'flowchart') addResultCard(data.title, data.mermaid_code, 'mermaid');
-                            else if (data.type === 'storyboard') addResultCard(data.title, data.content, 'storyboard');
-                            else addResultCard(data.title || `Q: ${data.question}`, data.content || data.answer);
-                        } else { showNotification(data.message, true); }
-                    } catch (e) { showNotification('An error occurred.', true); } finally { toggleLoading(false); }
-                });
-            });
-            
-            document.getElementById('extract-entities-button').addEventListener('click', async () => {
-                toggleLoading(true);
-                try {
-                    const response = await fetch(`${API_URL}/extract-entities`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ source: document.getElementById('entities-source').value }) });
-                    const data = await response.json();
-                    if (data.success) addResultCard('Extracted Entities', data.entities, 'entities');
-                    else showNotification(data.message, true);
-                } catch (e) { showNotification('An error occurred.', true); } finally { toggleLoading(false); }
-            });
+      <!-- Flowchart -->
+      <div class="tool-panel" id="tp-flowchart">
+        <div class="field"><label>Process / Topic</label><input type="text" id="flowchart-topic" placeholder="e.g., Training a Neural Network"></div>
+        <div class="field"><label>Source</label><select class="src-filter" id="flowchart-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="tool" data-tool="flowchart"><i class="fas fa-sitemap"></i> Create Flowchart</button>
+      </div>
 
-            document.getElementById('cluster-topics-button').addEventListener('click', async () => {
-                toggleLoading(true);
-                try {
-                    const response = await fetch(`${API_URL}/cluster-topics`);
-                    const data = await response.json();
-                    if (data.success) addResultCard('Topic Cluster Visualization', data.image, 'plot');
-                    else showNotification(data.message, true);
-                } catch (e) { showNotification('An error occurred.', true); } finally { toggleLoading(false); }
-            });
-            
-            document.getElementById('clear-data-button').addEventListener('click', async () => {
-                if (confirm('Are you sure you want to clear all data? This cannot be undone.')) {
-                    toggleLoading(true);
-                    try {
-                        const response = await fetch(`${API_URL}/clear-data`, { method: 'POST' });
-                        const data = await response.json();
-                        showNotification(data.message, !data.success);
-                        if (data.success) { updateSources(); resultsContainer.innerHTML = ''; }
-                    } catch (e) { showNotification('An error occurred.', true); } finally { toggleLoading(false); }
-                }
-            });
+      <!-- Storyboard -->
+      <div class="tool-panel" id="tp-storyboard">
+        <div class="field"><label>Topic</label><input type="text" id="storyboard-topic" placeholder="e.g., User Journey"></div>
+        <div class="field"><label>Source</label><select class="src-filter" id="storyboard-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="tool" data-tool="storyboard"><i class="fas fa-film"></i> Create Storyboard</button>
+      </div>
 
-            // Initial load
-            updateSources();
-        });
-    </script>
+      <!-- Entities -->
+      <div class="tool-panel" id="tp-entities">
+        <div class="field"><label>Source</label><select class="src-filter" id="entities-src"><option value="">All Sources</option></select></div>
+        <button class="btn btn-primary" data-action="entities"><i class="fas fa-tags"></i> Extract Entities</button>
+      </div>
+
+      <!-- Topics -->
+      <div class="tool-panel" id="tp-topics">
+        <p style="font-size:13px;color:var(--muted);align-self:center">Cluster all content into topics visually (needs ≥5 chunks)</p>
+        <button class="btn btn-primary" data-action="topics"><i class="fas fa-chart-scatter"></i> Analyze Topics</button>
+      </div>
+
+    </div><!-- end tool-inputs -->
+
+    <!-- Chat UI (shown only when Chat tab active) -->
+    <div id="chat-ui" style="display:none;border-bottom:1px solid var(--border)">
+      <div class="chat-messages" id="chat-messages">
+        <div style="text-align:center;font-size:12px;color:var(--muted);padding:20px 0">Start a conversation — your chat history is remembered within this session.</div>
+      </div>
+      <div class="chat-input-row">
+        <input type="text" id="chat-input" placeholder="Type your message...">
+        <button class="btn btn-primary" id="chat-send"><i class="fas fa-paper-plane"></i> Send</button>
+      </div>
+    </div>
+
+    <!-- Results -->
+    <div class="results" id="results">
+      <div class="welcome-card">
+        <h2><i class="fas fa-brain" style="color:var(--primary)"></i> Welcome to KnowledgeForge V2</h2>
+        <p>Add knowledge from any source, then use powerful AI tools to learn from it.</p>
+        <div class="feature-grid">
+          <div class="feature-item"><i class="fas fa-file-pdf"></i><span>PDF, Audio, Video, Images</span></div>
+          <div class="feature-item"><i class="fas fa-search"></i><span>Hybrid RAG Search</span></div>
+          <div class="feature-item"><i class="fas fa-clone"></i><span>Flashcards &amp; Plans</span></div>
+          <div class="feature-item"><i class="fas fa-comments"></i><span>Multi-turn Chat</span></div>
+          <div class="feature-item"><i class="fas fa-project-diagram"></i><span>Mind Maps</span></div>
+          <div class="feature-item"><i class="fas fa-gem"></i><span>Gemini 2.0 Powered</span></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Toast & Overlay -->
+<div class="toast" id="toast"></div>
+<div class="overlay" id="overlay">
+  <div class="spinner"></div>
+  <div class="overlay-text" id="overlay-text">Processing...</div>
+</div>
+
+<script src="/static/app.js"></script>
 </body>
 </html>

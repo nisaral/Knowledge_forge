@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Environment & Secrets — NEVER COMMIT
+.env
+*.env
+*.env.*
+
+# Knowledge Base Data (local session data — not for repo)
+knowledge_base.json
+faiss_index.bin
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+*.log
+
+# Docker
+*.tar
+
+# Temp uploads
+uploads/
+tmp/

@@ -1,19 +1,22 @@
-# Use an official Python runtime as a parent image
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# Set the working directory in the container
+# Install system deps for PyMuPDF
+RUN apt-get update && apt-get install -y \
+    libmupdf-dev \
+    mupdf-tools \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Copy the requirements file and install dependencies first for layer caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of your application's code into the container
 COPY . .
 
-# Expose the port the app runs on (Gunicorn will use this)
+# Exclude local data files from image
+RUN rm -f knowledge_base.json faiss_index.bin
+
 EXPOSE 8000
 
-# Set the command to run the app using a production server
-# Ensure GEMINI_API_KEY is set as a Secret in your deployment environment
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "8", "--timeout", "0", "app:app"]
+# GEMINI_API_KEY and FLASK_SECRET must be passed as environment variables at runtime
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "8", "--timeout", "120", "app:app"]
