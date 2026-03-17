@@ -49,7 +49,7 @@ Built with **Gemini 2.0** embeddings and generation, a **hybrid BM25 + semantic 
 
 | Layer | Technology |
 |---|---|
-| **AI / Embeddings** | Google Gemini 2.0 Flash + `text-embedding-004` (768-dim) |
+| **AI / Embeddings** | Google Gemini 2.0 Flash + gemini-embedding-2-preview |
 | **RAG** | FAISS (vector store) + BM25Okapi (keyword) + LLM re-ranking |
 | **Multimodal** | Gemini Files API (audio, video, image, PDF) + PyMuPDF |
 | **Backend** | Flask, Flask-CORS, Gunicorn |
@@ -202,5 +202,5 @@ MIT License — see [LICENSE](LICENSE)
 ---
 
 <div align="center">
-  <sub>Built with ❤️ by Keyush & Nisar — KnowledgeForge V2</sub>
+  <sub>Built with ❤️ by Keyush  — KnowledgeForge V2</sub>
 </div>
