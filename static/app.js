@@ -19,7 +19,17 @@ const loader = (show, text = 'Processing...') => {
 
 async function api(endpoint, opts = {}) {
   const r = await fetch(`${API}/${endpoint}`, opts);
-  return r.json();
+  let data;
+  try {
+    data = await r.json();
+  } catch {
+    throw new Error(`Server returned ${r.status}`);
+  }
+  if (!r.ok && !data.message) {
+    data.message = `Request failed (${r.status})`;
+    data.success = false;
+  }
+  return data;
 }
 
 // ── Sources ────────────────────────────────────────────────────────────────
@@ -91,7 +101,7 @@ function setupTextBtns() {
         });
         toast(d.message, !d.success);
         if (d.success) { $(inputId).value = ''; refreshSources(); }
-      } catch { toast('Network error.', true); }
+      } catch (e) { toast(e.message || 'Network error.', true); }
       finally { loader(false); }
     });
   });
@@ -126,12 +136,14 @@ function setupDropZone(dropId, inputId, progressId, fillId, label) {
     loader(true, `Processing ${label}… (${file.name})`);
     try {
       const r = await fetch(`${API}/upload-file`, { method: 'POST', body: fd });
-      const d = await r.json();
+      let d;
+      try { d = await r.json(); } catch { throw new Error(`Upload failed (${r.status})`); }
+      if (!r.ok && !d.message) { d.message = `Upload failed (${r.status})`; d.success = false; }
       clearInterval(tick);
       fill.style.width = '100%';
       toast(d.message, !d.success);
       if (d.success) { input.value = ''; refreshSources(); }
-    } catch { toast('Upload failed.', true); }
+    } catch (e) { toast(e.message || 'Upload failed.', true); }
     finally {
       loader(false);
       setTimeout(() => { prog.style.display = 'none'; fill.style.width = '0%'; }, 1000);

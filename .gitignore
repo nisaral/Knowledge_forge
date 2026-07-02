@@ -42,3 +42,4 @@ htmlcov/
 # Temp uploads
 uploads/
 tmp/
+tests/tmp_data/

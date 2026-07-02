@@ -1,0 +1,16 @@
+---
+pid: 8920
+cwd: "C:\Users\nisar\OneDrive\Desktop\Knowledge_forge-1"
+command: "pip install \"qdrant-client>=1.9,<2\" \"redis>=5.0,<6\" \"Flask-Session>=0.8,<1\" -q"
+started_at: 2026-07-02T18:08:52.144Z
+running_for_ms: 329995   
+---
+WARNING: Ignoring invalid distribution ~orch (C:\Users\nisar\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages)
+WARNING: Ignoring invalid distribution ~orch (C:\Users\nisar\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages)
+WARNING: Ignoring invalid distribution ~orch (C:\Users\nisar\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages)
+WARNING: Ignoring invalid distribution ~orch (C:\Users\nisar\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages)
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+pydocket 0.16.1 requires opentelemetry-instrumentation>=0.60b0, but you have opentelemetry-instrumentation 0.59b0 which is incompatible.
+
+[notice] A new release of pip is available: 25.2 -> 26.1.2
+[notice] To update, run: C:\Users\nisar\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe -m pip install --upgrade pip

@@ -1,0 +1,38 @@
+---
+pid: 8368
+cwd: "C:\Users\nisar\OneDrive\Desktop\Knowledge_forge-1"
+command: "pytest tests/ -v --tb=short"
+started_at: 2026-07-02T18:01:10.111Z
+running_for_ms: 790014   
+---
+C:\Users\nisar\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\LocalCache\local-packages\Python311\site-packages\pytest_asyncio\plugin.py:217: PytestDeprecationWarning: The configuration option "asyncio_default_fixture_loop_scope" is unset.
+The event loop scope for asynchronous fixtures will default to the fixture caching scope. Future versions of pytest-asyncio will default the loop scope for asynchronous fixtures to function scope. Set the default fixture loop scope explicitly in order to avoid unexpected behavior in the future. Valid fixture loop scopes are: "function", "class", "module", "package", "session"
+
+  warnings.warn(PytestDeprecationWarning(_DEFAULT_FIXTURE_LOOP_SCOPE_UNSET))
+============================= test session starts =============================
+platform win32 -- Python 3.11.9, pytest-8.3.0, pluggy-1.6.0 -- C:\Users\nisar\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.11_qbz5n2kfra8p0\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\nisar\OneDrive\Desktop\Knowledge_forge-1
+plugins: anyio-4.12.1, hydra-core-1.3.2, langsmith-0.8.8, locust-2.43.1, asyncio-0.26.0, mock-3.15.0
+asyncio: mode=Mode.STRICT, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 17 items
+
+tests/test_app.py::TestHealthEndpoints::test_index_returns_200 PASSED    [  5%]
+tests/test_app.py::TestHealthEndpoints::test_health_endpoint PASSED      [ 11%]
+tests/test_app.py::TestHealthEndpoints::test_ready_endpoint PASSED       [ 17%]
+tests/test_app.py::TestHealthEndpoints::test_get_sources_empty PASSED    [ 23%]
+tests/test_app.py::TestHealthEndpoints::test_clear_data PASSED           [ 29%]
+tests/test_app.py::TestContentIngestion::test_add_text_content PASSED    [ 35%]
+tests/test_app.py::TestContentIngestion::test_add_missing_source PASSED  [ 41%]
+tests/test_app.py::TestContentIngestion::test_add_missing_source_type PASSED [ 47%]
+tests/test_app.py::TestTools::test_ask_question_empty_kb PASSED          [ 52%]
+tests/test_app.py::TestTools::test_generate_invalid_tool PASSED          [ 58%]
+tests/test_app.py::TestTools::test_generate_tool_no_topic PASSED         [ 64%]
+tests/test_app.py::TestTools::test_cluster_topics_insufficient_data PASSED [ 70%]
+tests/test_app.py::TestTools::test_summarize_empty_kb PASSED             [ 76%]
+tests/test_app.py::TestTools::test_chat_clear PASSED                     [ 82%]
+tests/test_app.py::TestTools::test_chat_requires_message PASSED          [ 88%]
+tests/test_app.py::TestKnowledgeBase::test_hybrid_search_empty PASSED    [ 94%]
+tests/test_app.py::TestKnowledgeBase::test_chunk_text_overlap PASSED     [100%]
+
+============================= 17 passed in 11.17s =============================
