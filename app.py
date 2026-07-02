@@ -31,11 +31,10 @@ from services.cache import redis_health_check
 from services.embeddings import ensure_gemini_configured
 from services.ingestion import (
     chunk_text,
-    crawl_url,
     detect_file_type,
-    get_youtube_transcript,
     ingest_file_via_gemini,
     ingest_pdf_bytes,
+    ingest_text_source,
 )
 from services.knowledge_base import KnowledgeBase
 from services.llm_utils import (
@@ -112,11 +111,22 @@ def ready():
     configured = bool(GEMINI_API_KEY)
     vector_ok = kb.health_check()
     redis_ok = redis_health_check()
+    embed_ok = False
+    embed_model = None
+    if configured:
+        try:
+            from services.embeddings import _resolve_active_model
+            embed_model = _resolve_active_model()
+            embed_ok = True
+        except Exception as exc:
+            logger.warning("Embedding model probe failed: %s", exc)
     stats = kb.stats()
-    all_ready = configured and vector_ok and redis_ok
+    all_ready = configured and vector_ok and redis_ok and embed_ok
     return jsonify({
         "ready": all_ready,
         "gemini_configured": configured,
+        "embedding_model": embed_model,
+        "embedding_healthy": embed_ok,
         "vector_store": VECTOR_STORE,
         "vector_store_healthy": vector_ok,
         "redis_healthy": redis_ok,
@@ -144,27 +154,30 @@ def add_content():
 
     try:
         ensure_gemini_configured()
-        if stype == "youtube":
-            text = get_youtube_transcript(source)
-        elif stype == "text":
-            text = source
-        elif stype == "web":
-            text = crawl_url(source)
-        else:
-            return jsonify({"success": False, "message": f"Unknown source type: {stype}"}), 400
+        text, detail, effective_type = ingest_text_source(source, stype)
+        if detail.startswith("Unknown source type"):
+            return jsonify({"success": False, "message": detail}), 400
 
         if not text:
-            return jsonify({"success": False, "message": f"Failed to extract content from {stype}."}), 422
+            msg = detail or f"Failed to extract content from {effective_type}."
+            return jsonify({"success": False, "message": msg}), 422
 
         chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)
         if not chunks:
             return jsonify({"success": False, "message": "No usable text found in content."}), 422
 
-        success = kb.add_chunks(chunks, source, stype)
+        success = kb.add_chunks(chunks, source, effective_type)
+        note = ""
+        if stype == "web" and effective_type == "youtube":
+            note = " (detected as YouTube — use the YouTube tab next time)"
         return jsonify({
             "success": success,
-            "message": f"Added {len(chunks)} chunks from {stype}." if success else "Failed to process content.",
+            "message": (
+                f"Added {len(chunks)} chunks from {effective_type}.{note}"
+                if success else "Failed to process content."
+            ),
             "chunks_added": len(chunks) if success else 0,
+            "source_type": effective_type,
         })
     except ValueError as exc:
         return jsonify({"success": False, "message": str(exc)}), 503
@@ -378,13 +391,25 @@ def generate_tool_content():
     source = data.get("source") or None
 
     if not topic:
-        return jsonify({"success": False, "message": "A topic is required."}), 400
+        return jsonify({"success": False, "message": "Enter a topic in the input field first."}), 400
+
+    if tool not in ("mock_test", "mindmap", "flowchart", "storyboard", "flashcards", "study_plan"):
+        return jsonify({"success": False, "message": "Invalid tool specified."}), 400
+
+    if kb.count() == 0:
+        return jsonify({
+            "success": False,
+            "message": "Knowledge base is empty. Add a web page, YouTube video, or text first.",
+        }), 422
 
     try:
         ensure_gemini_configured()
         chunks = kb.hybrid_search(topic, source_filter=source)
         if not chunks:
-            return jsonify({"success": False, "message": "No relevant content found for this topic."}), 404
+            return jsonify({
+                "success": False,
+                "message": "No relevant content found for this topic. Try a different topic or add more sources.",
+            }), 404
 
         context = "\n\n".join(chunks)
         mermaid_rules = (
@@ -421,9 +446,6 @@ def generate_tool_content():
                 f"Be specific and actionable.\n\nContext:\n{context}"
             ),
         }
-
-        if tool not in prompts:
-            return jsonify({"success": False, "message": "Invalid tool specified."}), 400
 
         resp_text = generate_content(prompts[tool])
 

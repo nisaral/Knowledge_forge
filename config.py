@@ -25,7 +25,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 FLASK_SECRET = os.environ.get("FLASK_SECRET", "kf-v2-secret-change-me")
 
 # ─── Model Configuration ─────────────────────────────────────────────────────
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "models/text-embedding-004")
+# text-embedding-004 was retired; gemini-embedding-001 is the supported replacement.
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "models/gemini-embedding-001")
 GEN_MODEL = os.environ.get("GEN_MODEL", "gemini-2.0-flash")
 EMBED_DIM = _int_env("EMBED_DIM", 768)
 

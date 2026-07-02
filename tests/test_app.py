@@ -132,14 +132,35 @@ class TestTools:
             assert "information" in data["answer"].lower()
 
     def test_generate_invalid_tool(self, client):
-        c, _ = client
+        c, app_mod = client
+        app_mod.kb.clear(save=False)
+        mock_vec = np.array([[0.0] * 768], dtype=np.float32)
+        with patch("services.knowledge_base.gemini_embed", return_value=mock_vec):
+            c.post(
+                "/api/add-content",
+                data=json.dumps({"source": "test content " * 30, "source_type": "text"}),
+                content_type="application/json",
+            )
         r = c.post(
             "/api/generate-tool-content",
             data=json.dumps({"tool": "invalid_tool", "topic": "test", "source": None}),
             content_type="application/json",
         )
         data = json.loads(r.data)
+        assert r.status_code == 400
         assert data["success"] is False
+
+    def test_generate_tool_empty_kb(self, client):
+        c, app_mod = client
+        app_mod.kb.clear(save=False)
+        r = c.post(
+            "/api/generate-tool-content",
+            data=json.dumps({"tool": "flashcards", "topic": "test", "source": None}),
+            content_type="application/json",
+        )
+        data = json.loads(r.data)
+        assert r.status_code == 422
+        assert "empty" in data["message"].lower()
 
     def test_generate_tool_no_topic(self, client):
         c, _ = client

@@ -85,13 +85,21 @@ function setupTabs(barId, panelPrefix, onChange) {
 }
 
 // ── Text/URL Content ──────────────────────────────────────────────────────
+function isYouTubeUrl(val) {
+  return /(?:youtube\.com|youtu\.be)/i.test(val);
+}
+
 function setupTextBtns() {
   document.querySelectorAll('.add-text-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const type = btn.dataset.type;
+      let type = btn.dataset.type;
       const inputId = type === 'text' ? 'custom-text' : (type === 'youtube' ? 'yt-url' : 'web-url');
       const val = $(inputId).value.trim();
       if (!val) return toast('Please enter a value.', true);
+      if (type === 'web' && isYouTubeUrl(val)) {
+        type = 'youtube';
+        toast('YouTube link detected — fetching transcript…');
+      }
       loader(true, `Ingesting ${type} content…`);
       try {
         const d = await api('add-content', {
@@ -99,7 +107,7 @@ function setupTextBtns() {
           headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ source: val, source_type: type })
         });
-        toast(d.message, !d.success);
+        toast(d.message || (d.success ? 'Content added.' : 'Failed to add content.'), !d.success);
         if (d.success) { $(inputId).value = ''; refreshSources(); }
       } catch (e) { toast(e.message || 'Network error.', true); }
       finally { loader(false); }
@@ -280,7 +288,7 @@ async function runQnA() {
       body: JSON.stringify({question:q, source:src||null})
     });
     if (d.success) textCard(`Q: ${q}`, 'fa-question-circle', d.answer);
-    else toast(d.message, true);
+    else toast(d.message || 'Failed to get answer.', true);
   } catch { toast('Error.', true); }
   finally { loader(false); }
 }
@@ -315,7 +323,7 @@ async function runTool(tool) {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({tool, topic, source:src||null})
     });
-    if (!d.success) { toast(d.message, true); return; }
+    if (!d.success) { toast(d.message || 'Tool generation failed.', true); return; }
 
     if (tool === 'flashcards') flashcardsCard(d.title, d.content);
     else if (tool === 'storyboard') storyboardCard(d.title, d.content);

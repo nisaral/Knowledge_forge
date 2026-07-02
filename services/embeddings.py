@@ -1,4 +1,4 @@
-"""Gemini embedding helpers with retry and batch resilience."""
+"""Gemini embedding helpers with retry, model fallback, and batch resilience."""
 import logging
 import time
 
@@ -16,6 +16,27 @@ from config import (
 logger = logging.getLogger(__name__)
 
 _configured = False
+_active_model: str | None = None
+
+# text-embedding-004 was removed from the API; gemini-embedding-001 is the supported replacement.
+_MODEL_FALLBACKS = [
+    "models/gemini-embedding-001",
+    "models/embedding-001",
+    "models/text-embedding-004",
+]
+
+
+def _model_candidates() -> list[str]:
+    seen = set()
+    candidates = []
+    for m in [EMBED_MODEL, *_MODEL_FALLBACKS]:
+        if not m:
+            continue
+        name = m if m.startswith("models/") else f"models/{m}"
+        if name not in seen:
+            seen.add(name)
+            candidates.append(name)
+    return candidates
 
 
 def ensure_gemini_configured() -> None:
@@ -39,22 +60,88 @@ def _parse_embedding(raw) -> list[float]:
     return []
 
 
-def _embed_single(text: str, task_type: str) -> np.ndarray:
+def _embed_kwargs(task_type: str) -> dict:
+    """Build embed_content kwargs — gemini-embedding-001 supports task_type + output_dimensionality."""
+    kwargs = {"output_dimensionality": EMBED_DIM}
+    model = _active_model or ""
+    if "gemini-embedding-2" not in model:
+        kwargs["task_type"] = task_type
+    return kwargs
+
+
+def _format_for_embedding_2(text: str, task_type: str) -> str:
+    """gemini-embedding-2 uses prompt prefixes instead of task_type."""
+    if task_type == "retrieval_query":
+        return f"task: search result | query: {text}"
+    return f"title: none | text: {text}"
+
+
+def _call_embed(model: str, content, task_type: str) -> list[float]:
     ensure_gemini_configured()
+    if "gemini-embedding-2" in model:
+        if isinstance(content, list):
+            content = [_format_for_embedding_2(t, task_type) for t in content]
+        else:
+            content = _format_for_embedding_2(content, task_type)
+        result = genai.embed_content(
+            model=model,
+            content=content,
+            output_dimensionality=EMBED_DIM,
+        )
+    else:
+        result = genai.embed_content(
+            model=model,
+            content=content,
+            **_embed_kwargs(task_type),
+        )
+    raw = result.get("embedding", result)
+    if isinstance(content, list) and raw and isinstance(raw[0], (int, float)):
+        return _parse_embedding(raw)
+    if isinstance(content, list):
+        return _parse_embedding(raw[0]) if raw else []
+    return _parse_embedding(raw)
+
+
+def _resolve_active_model() -> str:
+    global _active_model
+    if _active_model:
+        return _active_model
+
+    ensure_gemini_configured()
+    probe = "KnowledgeForge embedding probe"
+    last_err = None
+    for model in _model_candidates():
+        try:
+            vec = _call_embed(model, probe, "retrieval_document")
+            if len(vec) != EMBED_DIM:
+                raise ValueError(f"Expected {EMBED_DIM}-dim embedding, got {len(vec)} from {model}")
+            _active_model = model
+            logger.info("Using embedding model: %s (%d-dim)", model, EMBED_DIM)
+            return model
+        except Exception as exc:
+            last_err = exc
+            logger.warning("Embedding model %s unavailable: %s", model, exc)
+
+    raise RuntimeError(
+        f"No working embedding model found. Tried: {_model_candidates()}. Last error: {last_err}"
+    )
+
+
+def _embed_single(text: str, task_type: str) -> np.ndarray:
+    global _active_model
+    _resolve_active_model()
     last_err = None
     for attempt in range(EMBED_MAX_RETRIES):
         try:
-            result = genai.embed_content(
-                model=EMBED_MODEL,
-                content=text,
-                task_type=task_type,
-            )
-            vec = _parse_embedding(result.get("embedding", result))
+            vec = _call_embed(_active_model, text, task_type)
             if len(vec) != EMBED_DIM:
                 raise ValueError(f"Expected {EMBED_DIM}-dim embedding, got {len(vec)}")
             return np.array(vec, dtype="float32")
         except Exception as exc:
             last_err = exc
+            if "404" in str(exc) or "not found" in str(exc).lower():
+                _active_model = None
+                _resolve_active_model()
             wait = 2 ** attempt
             logger.warning("Embedding retry %d/%d: %s", attempt + 1, EMBED_MAX_RETRIES, exc)
             time.sleep(wait)
@@ -66,19 +153,21 @@ def gemini_embed(texts: list[str]) -> np.ndarray:
     if not texts:
         return np.empty((0, EMBED_DIM), dtype="float32")
 
+    _resolve_active_model()
     vectors: list[np.ndarray] = []
     for i in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[i:i + EMBED_BATCH_SIZE]
         try:
+            if "gemini-embedding-2" in (_active_model or ""):
+                raise ValueError("Batch via per-item for embedding-2")
             ensure_gemini_configured()
             result = genai.embed_content(
-                model=EMBED_MODEL,
+                model=_active_model,
                 content=batch,
-                task_type="retrieval_document",
+                **_embed_kwargs("retrieval_document"),
             )
             raw = result.get("embedding", [])
             if batch and isinstance(raw[0], (int, float)):
-                # Single-item response shape
                 parsed = [_parse_embedding(raw)]
             else:
                 parsed = [_parse_embedding(item) for item in raw]
