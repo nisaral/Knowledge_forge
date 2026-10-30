@@ -1,19 +1,18 @@
-flask>=3.0,<4
-flask-cors>=4.0,<5
-gunicorn>=22.0,<24
-requests>=2.31,<3
-beautifulsoup4>=4.12,<5
-youtube-transcript-api>=1.2,<2
-PyMuPDF>=1.24,<2
-rank-bm25>=0.2,<1
-faiss-cpu>=1.8,<2
-numpy>=1.26,<3
-google-generativeai>=0.8,<1
-scikit-learn>=1.4,<2
-matplotlib>=3.8,<4
-seaborn>=0.13,<1
-pytest>=8.0,<9
-python-dotenv>=1.0,<2
-qdrant-client>=1.9,<2
-redis>=5.0,<6
-Flask-Session>=0.8,<1
+# Runtime dependencies (exact pins, tested on Python 3.10-3.12).
+flask==3.1.3
+flask-cors==4.0.2
+gunicorn==23.0.0
+python-dotenv==1.2.4
+requests==2.34.2
+beautifulsoup4==4.15.0
+youtube-transcript-api==1.2.4
+pymupdf==1.28.2
+rank-bm25==0.2.2
+faiss-cpu==1.15.1
+numpy==2.2.6
+google-generativeai==0.8.6
+scikit-learn==1.7.2
+matplotlib==3.10.8
+# Optional production backends (VECTOR_STORE=qdrant, REDIS_URL)
+qdrant-client==1.15.1
+redis==5.3.1
