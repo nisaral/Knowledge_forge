@@ -13,7 +13,7 @@ def app_kb(fake_embed):
 
 @pytest.fixture
 def client(app_kb, monkeypatch):
-    monkeypatch.setattr(web, "generate_content", lambda prompt: "Answer citing [1].")
+    monkeypatch.setattr(web, "generate_content", lambda prompt, **_k: "Answer citing [1].")
     app = web.create_app(kb=app_kb)
     app.config["TESTING"] = True
     return app.test_client()
@@ -123,7 +123,7 @@ def test_ask_on_empty_kb_is_graceful(client):
 def test_chat_uses_client_history(client, app_kb, monkeypatch):
     seed(app_kb)
     prompts = []
-    monkeypatch.setattr(web, "generate_content", lambda p: prompts.append(p) or "ok")
+    monkeypatch.setattr(web, "generate_content", lambda p, **_k: prompts.append(p) or "ok")
     history = [{"role": "user", "content": "first question"}, {"role": "assistant", "content": "first answer"},
                {"role": "hacker", "content": 123}]
     r = client.post("/api/chat", json={"message": "follow up", "history": history})
@@ -140,7 +140,7 @@ def test_clean_history_limits_turns():
 def test_tools(client, app_kb, monkeypatch):
     seed(app_kb)
     monkeypatch.setattr(web, "generate_content",
-                        lambda p: '```json\n[{"question": "Q", "answer": "A"}]\n```' if "flashcards" in p
+                        lambda p, **_k: '```json\n[{"question": "Q", "answer": "A"}]\n```' if "flashcards" in p
                         else "```mermaid\ngraph TD\nA[Light] --> B[Sugar]\n```")
     cards = client.post("/api/generate-tool-content", json={"tool": "flashcards", "topic": "light"}).get_json()
     assert cards["content"] == [{"question": "Q", "answer": "A"}]
@@ -156,14 +156,15 @@ def test_tool_on_empty_kb(client):
 def test_summarize_and_entities(client, app_kb, monkeypatch):
     seed(app_kb)
     assert client.post("/api/summarize", json={}).get_json()["content"] == "Answer citing [1]."
-    monkeypatch.setattr(web, "generate_content", lambda p: '{"Concepts": ["Photosynthesis", " ", "Photosynthesis"]}')
+    ents_json = '{"Concepts": ["Photosynthesis", " ", "Photosynthesis"]}'
+    monkeypatch.setattr(web, "generate_content", lambda p, **_k: ents_json)
     ents = client.post("/api/extract-entities", json={}).get_json()["entities"]
     assert ents == {"Concepts": ["Photosynthesis"]}
 
 
 def test_cluster_topics(client, app_kb, monkeypatch):
     seed(app_kb)
-    monkeypatch.setattr(web, "generate_content", lambda p: "Plant biology")
+    monkeypatch.setattr(web, "generate_content", lambda p, **_k: "Plant biology")
     data = client.get("/api/cluster-topics").get_json()
     assert data["image"].startswith("data:image/png;base64,") and data["labels"]
 
@@ -177,7 +178,7 @@ def test_llm_failure_maps_to_502(client, app_kb, monkeypatch):
 
     seed(app_kb)
 
-    def fail(_p):
+    def fail(_p, **_k):
         raise LLMError("The AI service is unavailable.")
 
     monkeypatch.setattr(web, "generate_content", fail)

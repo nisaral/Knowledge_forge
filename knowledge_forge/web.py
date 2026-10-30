@@ -4,63 +4,79 @@ from __future__ import annotations
 import base64
 import functools
 import io
+import json
 import logging
 import os
+import threading
+import time
+import uuid
+from collections import defaultdict, deque
 
 import numpy as np
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, Response, g, jsonify, render_template, request, stream_with_context
 
 from knowledge_forge import __version__
 from knowledge_forge.cache import redis_health_check
-from knowledge_forge.chunking import chunk_text, normalize_text
+from knowledge_forge.chunking import chunk_text, content_hash, normalize_text
 from knowledge_forge.config import flask_secret, get_settings
 from knowledge_forge.errors import (
     MISSING_KEY_MESSAGE,
     IngestionError,
     KnowledgeForgeError,
+    LLMError,
+    NotFoundError,
+    RateLimitError,
     ValidationError,
 )
 from knowledge_forge.ingestion import (
     SOURCE_TYPES,
-    detect_file_type,
     ingest_file_via_gemini,
     ingest_pdf_bytes,
     ingest_text_source,
+    safe_filename,
+    sniff_file_type,
 )
 from knowledge_forge.knowledge_base import KnowledgeBase, get_knowledge_base
 from knowledge_forge.llm import (
     clean_label,
-    clean_llm_output,
     ensure_gemini_configured,
     generate_content,
+    normalize_mermaid,
     parse_json_output,
-    sanitize_mermaid,
+    stream_content,
+    validate_flashcards,
+    validate_quiz,
+    validate_storyboard,
 )
+from knowledge_forge.logging_setup import configure_logging
 from knowledge_forge.prompts import (
+    FILE_PROMPTS,
+    JSON_TOOLS,
+    SYSTEM_INSTRUCTION,
+    TOOL_ALIASES,
     TOOLS,
     answer_prompt,
     chat_prompt,
+    cited_numbers,
     cluster_label_prompt,
     entities_prompt,
+    repair_json_prompt,
     summary_prompt,
     tool_prompt,
 )
 
 logger = logging.getLogger("knowledgeforge")
 
-FILE_PROMPTS = {
-    "audio": "Transcribe this audio completely and accurately. Preserve all key concepts and details.",
-    "video": (
-        "Analyze this educational video. Transcribe all speech and describe key visual content, "
-        "diagrams, and concepts shown."
-    ),
-    "image": "Extract all text (OCR) from this image. Also describe any diagrams, charts, or visual content in detail.",
-}
-
 NO_CONTEXT_ANSWER = (
     "I couldn't find anything relevant in your knowledge base. Add a document, web page or "
     "video on this topic first, or try rephrasing the question."
 )
+
+_VALIDATORS = {
+    "flashcards": (validate_flashcards, '[{"question": str, "answer": str}]'),
+    "storyboard": (validate_storyboard, '[{"title": str, "scene": str}]'),
+    "quiz": (validate_quiz, '[{"question": str, "options": [4 x str], "answer": int, "explanation": str}]'),
+}
 
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -75,13 +91,16 @@ def _json_body() -> dict:
     return data
 
 
-def _opt_str(data: dict, key: str) -> str | None:
+def _opt_str(data: dict, key: str, max_len: int | None = None) -> str | None:
     value = data.get(key)
     if value is None:
         return None
     if not isinstance(value, str):
         raise ValidationError(f"'{key}' must be a string.")
-    return value.strip() or None
+    value = value.strip() or None
+    if value and max_len and len(value) > max_len:
+        raise ValidationError(f"'{key}' is too long (max {max_len} characters).")
+    return value
 
 
 def _required_str(data: dict, key: str, label: str, max_len: int | None = None) -> str:
@@ -93,14 +112,18 @@ def _required_str(data: dict, key: str, label: str, max_len: int | None = None) 
     return value
 
 
-def _citations(hits: list[dict]) -> list[dict]:
+def _citations(hits: list[dict], answer: str | None = None) -> list[dict]:
+    """Numbered citations; ``cited`` marks the ones the answer actually references."""
+    limit = get_settings().citation_snippet_chars
+    used = cited_numbers(answer) if answer is not None else set()
     return [
         {
             "n": i,
             "source": h.get("source", ""),
             "source_type": h.get("source_type", "text"),
-            "snippet": (h.get("text") or "")[:320],
+            "snippet": (h.get("text") or "")[:limit],
             "score": h.get("score"),
+            "cited": i in used,
         }
         for i, h in enumerate(hits, start=1)
     ]
@@ -110,6 +133,7 @@ def _clean_history(raw, turns: int) -> list[dict]:
     """Validate client-supplied chat history and keep the last ``turns`` exchanges."""
     if not isinstance(raw, list) or turns <= 0:
         return []
+    limit = get_settings().history_message_chars
     cleaned = []
     for item in raw[-turns * 2:]:
         if not isinstance(item, dict):
@@ -117,26 +141,76 @@ def _clean_history(raw, turns: int) -> list[dict]:
         role = "user" if item.get("role") == "user" else "assistant"
         content = item.get("content")
         if isinstance(content, str) and content.strip():
-            cleaned.append({"role": role, "content": content.strip()[:2000]})
+            cleaned.append({"role": role, "content": content.strip()[:limit]})
     return cleaned
 
 
-def api_endpoint(fn):
-    """Translate domain errors into consistent JSON responses."""
+class RateLimiter:
+    """Per-client sliding-window limiter for the expensive (LLM-backed) endpoints.
 
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        try:
-            return fn(*args, **kwargs)
-        except KnowledgeForgeError as exc:
-            if exc.status >= 500:
-                logger.warning("%s failed: %s", fn.__name__, exc)
-            return _error(str(exc), exc.status)
-        except Exception:
-            logger.exception("%s failed unexpectedly", fn.__name__)
-            return _error("Something went wrong on the server. Please try again.", 500)
+    In-memory, so the limit applies per worker process; put a shared limiter (e.g. at the
+    reverse proxy) in front of multi-worker deployments that need a hard global cap.
+    """
 
-    return wrapper
+    def __init__(self, per_minute: int) -> None:
+        self.per_minute = per_minute
+        self._hits: dict[str, deque] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    def check(self, key: str) -> None:
+        if self.per_minute <= 0:
+            return
+        now = time.monotonic()
+        with self._lock:
+            window = self._hits[key]
+            while window and now - window[0] > 60:
+                window.popleft()
+            if len(window) >= self.per_minute:
+                raise RateLimitError("Too many requests. Please wait a minute and try again.")
+            window.append(now)
+            if len(self._hits) > 10_000:  # drop idle clients so memory stays bounded
+                for k in [k for k, v in self._hits.items() if not v or now - v[-1] > 60]:
+                    del self._hits[k]
+
+
+def api_endpoint(fn=None, *, limited: bool = False):
+    """Translate domain errors into consistent JSON responses (optionally rate limited)."""
+
+    def decorate(view):
+        @functools.wraps(view)
+        def wrapper(*args, **kwargs):
+            try:
+                if limited:
+                    from flask import current_app
+
+                    current_app.extensions["kf_rate_limiter"].check(request.remote_addr or "unknown")
+                return view(*args, **kwargs)
+            except KnowledgeForgeError as exc:
+                if exc.status >= 500:
+                    logger.warning("%s failed: %s", view.__name__, exc)
+                return _error(str(exc), exc.status)
+            except Exception:
+                logger.exception("%s failed unexpectedly", view.__name__)
+                return _error("Something went wrong on the server. Please try again.", 500)
+
+        return wrapper
+
+    return decorate(fn) if fn is not None else decorate
+
+
+def _scope(kb: KnowledgeBase, data: dict) -> str | None:
+    """Return the requested source filter, or 404 if that source does not exist."""
+    source = _opt_str(data, "source", get_settings().source_name_max_chars)
+    if source and not kb.source_exists(source):
+        raise NotFoundError("That source is no longer in your knowledge base. Pick another or clear the focus.")
+    return source
+
+
+def _note_label(text: str, title: str | None) -> str:
+    if title:
+        return title
+    preview = normalize_text(text)[:48].strip()
+    return f"Note: {preview} · {content_hash(normalize_text(text))[:6]}"
 
 
 def _ingest(kb: KnowledgeBase, text: str | None, source: str, source_type: str, metadata=None):
@@ -147,9 +221,13 @@ def _ingest(kb: KnowledgeBase, text: str | None, source: str, source_type: str, 
     truncated = len(text) > settings.max_text_chars
     text = text[: settings.max_text_chars]
     chunks = chunk_text(text, settings.chunk_size, settings.chunk_overlap)
-    added = kb.add_chunks(chunks, source, source_type, metadata=metadata)
-    if added:
+    added, removed = kb.sync_source(chunks, source, source_type, metadata=metadata, replace=True)
+    if added and removed:
+        message = f"Updated {source_type} source: {added} new chunk{'s' if added != 1 else ''}, {removed} removed."
+    elif added:
         message = f"Added {added} chunk{'s' if added != 1 else ''} from {source_type}."
+    elif removed:
+        message = f"Updated {source_type} source: removed {removed} outdated chunk{'s' if removed != 1 else ''}."
     else:
         message = "This content is already in your knowledge base; nothing new to add."
     if truncated:
@@ -158,10 +236,56 @@ def _ingest(kb: KnowledgeBase, text: str | None, source: str, source_type: str, 
         "success": True,
         "message": message,
         "chunks_added": added,
+        "chunks_removed": removed,
         "chunks_total": len(chunks),
         "source": source,
         "source_type": source_type,
     })
+
+
+def _balanced_text(chunks: list[dict], budget: int) -> str:
+    """Take chunks round-robin across sources (in document order) up to ``budget`` chars."""
+    by_source: dict[str, list[str]] = {}
+    for c in chunks:
+        by_source.setdefault(c["source"], []).append(c["text"])
+    queues = [deque(v) for v in by_source.values()]
+    parts: list[str] = []
+    used = 0
+    while queues and used < budget:
+        for q in list(queues):
+            if not q:
+                queues.remove(q)
+                continue
+            piece = q.popleft()[: budget - used]
+            parts.append(piece)
+            used += len(piece) + 1
+            if used >= budget:
+                break
+    return "\n".join(parts)
+
+
+def _structured(tool: str, prompt: str) -> list[dict]:
+    """Generate JSON for ``tool`` and validate it, with one repair round-trip."""
+    validate, shape = _VALIDATORS[tool]
+    raw = generate_content(prompt, system=SYSTEM_INSTRUCTION, json_mode=True)
+    try:
+        items = validate(parse_json_output(raw))
+    except LLMError:
+        items = []
+    if not items:
+        logger.info("Structured %s output invalid; asking the model to repair it", tool)
+        repaired = generate_content(repair_json_prompt(raw, shape), json_mode=True)
+        try:
+            items = validate(parse_json_output(repaired))
+        except LLMError:
+            items = []
+    if not items:
+        raise LLMError("The model returned an unexpected format. Please try again.")
+    return items
+
+
+def _sse(event: str, data) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 # ─── Application factory ────────────────────────────────────────────────────
@@ -176,6 +300,12 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
     app.secret_key = flask_secret(settings)
     app.config["MAX_CONTENT_LENGTH"] = settings.max_upload_bytes
     app.config["JSON_SORT_KEYS"] = False
+    app.json.sort_keys = False
+    app.extensions["kf_rate_limiter"] = RateLimiter(settings.rate_limit_per_minute)
+    if settings.trusted_proxies:
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=settings.trusted_proxies, x_proto=settings.trusted_proxies)
 
     if settings.cors_origins:
         from flask_cors import CORS
@@ -190,11 +320,32 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
 
     app.extensions["kf_get_kb"] = get_kb
 
+    @app.before_request
+    def start_timer():
+        g.request_id = request.headers.get("X-Request-ID", "")[:64] or uuid.uuid4().hex[:12]
+        g.started = time.perf_counter()
+
     @app.after_request
     def security_headers(resp):
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("X-Frame-Options", "DENY")
         resp.headers.setdefault("Referrer-Policy", "same-origin")
+        resp.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; connect-src 'self'; font-src 'self' data:; "
+            "frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        )
+        resp.headers["X-Request-ID"] = g.get("request_id", "")
+        if request.path.startswith("/api/"):
+            resp.headers.setdefault("Cache-Control", "no-store")
+            logger.info(
+                "%s %s -> %s", request.method, request.path, resp.status_code,
+                extra={
+                    "request_id": g.get("request_id"), "path": request.path, "status": resp.status_code,
+                    "duration_ms": round((time.perf_counter() - g.get("started", time.perf_counter())) * 1000, 1),
+                },
+            )
         return resp
 
     @app.errorhandler(413)
@@ -212,10 +363,14 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
     # ── Pages & status ──────────────────────────────────────────────────────
     @app.route("/")
     def index():
-        return render_template("index.html", version=__version__, max_upload_mb=settings.max_upload_mb)
+        return render_template(
+            "index.html", version=__version__, max_upload_mb=settings.max_upload_mb,
+            max_question_chars=settings.max_question_chars,
+        )
 
     @app.route("/api/health")
     def health():
+        # Liveness only: no external calls, so a slow Gemini/Qdrant never fails it.
         return jsonify({"status": "ok", "service": "knowledgeforge", "version": __version__})
 
     @app.route("/api/ready")
@@ -248,7 +403,7 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
     @app.route("/api/delete-source", methods=["POST"])
     @api_endpoint
     def delete_source():
-        source = _required_str(_json_body(), "source", "Source")
+        source = _required_str(_json_body(), "source", "Source", get_settings().source_name_max_chars)
         removed = get_kb().delete_source(source)
         if not removed:
             return _error("Source not found.", 404)
@@ -262,10 +417,10 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
 
     # ── Ingestion ───────────────────────────────────────────────────────────
     @app.route("/api/add-content", methods=["POST"])
-    @api_endpoint
+    @api_endpoint(limited=True)
     def add_content():
         data = _json_body()
-        source = _required_str(data, "source", "Source content")
+        source = _required_str(data, "source", "Source content", get_settings().max_text_chars)
         stype = (_opt_str(data, "source_type") or "").lower()
         if stype not in SOURCE_TYPES:
             raise ValidationError(f"Unknown source type '{stype}'. Use one of: {', '.join(SOURCE_TYPES)}.")
@@ -275,66 +430,115 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
             raise IngestionError(detail or f"Failed to extract content from {effective_type}.")
         label = source
         if effective_type == "text":
-            title = _opt_str(data, "title")
-            label = title or f"Note: {normalize_text(source)[:48]}"
-        return _ingest(get_kb(), text, label[:500], effective_type)
+            label = _note_label(source, _opt_str(data, "title", 200))
+        return _ingest(get_kb(), text, label[: get_settings().source_name_max_chars], effective_type)
 
     @app.route("/api/upload-file", methods=["POST"])
-    @api_endpoint
+    @api_endpoint(limited=True)
     def upload_file():
         f = request.files.get("file")
         if not f or not f.filename:
             raise ValidationError("No file provided.")
-        filename = os.path.basename(f.filename.replace("\\", "/"))[:200] or "upload"
-        data = f.read()
+        filename = safe_filename(f.filename)
+        data = f.read(settings.max_upload_bytes + 1)
+        if len(data) > settings.max_upload_bytes:
+            return _error(f"File too large. The limit is {settings.max_upload_mb} MB.", 413)
         if not data:
             raise ValidationError("Uploaded file is empty.")
-        detected = detect_file_type(filename, f.mimetype or "")
+        detected = sniff_file_type(filename, f.mimetype or "", data[:64])
         if not detected:
             raise ValidationError(
-                "Unsupported file type. Use PDF, TXT/MD, audio (MP3/WAV/M4A/OGG), "
+                "Unsupported or mislabelled file. Use PDF, TXT/MD, audio (MP3/WAV/M4A/OGG), "
                 "video (MP4/WEBM/MOV) or images (PNG/JPG/GIF/WEBP)."
             )
         source_type, mime = detected
-        ensure_gemini_configured()
         if source_type == "pdf":
             text = ingest_pdf_bytes(data)
         elif source_type == "text":
             try:
-                text = data.decode("utf-8")
+                text = data.decode("utf-8-sig")
             except UnicodeDecodeError:
                 text = data.decode("latin-1")
         else:
+            ensure_gemini_configured()
             text = ingest_file_via_gemini(data, mime, FILE_PROMPTS[source_type])
         if not text:
             raise IngestionError(f"Could not extract any content from '{filename}'.")
+        ensure_gemini_configured()
         return _ingest(get_kb(), text, filename, source_type, metadata={"filename": filename})
 
     # ── Q&A and chat ────────────────────────────────────────────────────────
     @app.route("/api/ask-question", methods=["POST"])
-    @api_endpoint
+    @api_endpoint(limited=True)
     def ask_question():
         data = _json_body()
         question = _required_str(data, "question", "Question", get_settings().max_question_chars)
-        source = _opt_str(data, "source")
+        k = get_kb()
+        source = _scope(k, data)
         ensure_gemini_configured()
-        hits = get_kb().hybrid_search(question, source_filter=source)
+        hits = k.hybrid_search(question, source_filter=source)
         if not hits:
-            return jsonify({"success": True, "question": question, "answer": NO_CONTEXT_ANSWER, "sources": []})
-        answer = generate_content(answer_prompt(question, hits))
-        return jsonify({"success": True, "question": question, "answer": answer, "sources": _citations(hits)})
+            return jsonify({
+                "success": True, "question": question, "answer": NO_CONTEXT_ANSWER, "sources": [], "grounded": False,
+            })
+        answer = generate_content(answer_prompt(question, hits), system=SYSTEM_INSTRUCTION)
+        cites = _citations(hits, answer)
+        return jsonify({
+            "success": True, "question": question, "answer": answer, "sources": cites,
+            "grounded": any(c["cited"] for c in cites),
+        })
 
-    @app.route("/api/chat", methods=["POST"])
-    @api_endpoint
-    def chat():
+    def _chat_inputs():
         data = _json_body()
         message = _required_str(data, "message", "Message", get_settings().max_question_chars)
-        source = _opt_str(data, "source")
+        k = get_kb()
+        source = _scope(k, data)
         history = _clean_history(data.get("history"), get_settings().chat_history_turns)
         ensure_gemini_configured()
-        hits = get_kb().hybrid_search(message, source_filter=source) if get_kb().count() else []
-        answer = generate_content(chat_prompt(message, hits, history))
-        return jsonify({"success": True, "message": message, "answer": answer, "sources": _citations(hits)})
+        hits = k.hybrid_search(message, source_filter=source) if k.count() else []
+        return message, hits, chat_prompt(message, hits, history)
+
+    @app.route("/api/chat", methods=["POST"])
+    @api_endpoint(limited=True)
+    def chat():
+        message, hits, prompt = _chat_inputs()
+        answer = generate_content(prompt, system=SYSTEM_INSTRUCTION)
+        cites = _citations(hits, answer)
+        return jsonify({
+            "success": True, "message": message, "answer": answer, "sources": cites,
+            "grounded": any(c["cited"] for c in cites),
+        })
+
+    @app.route("/api/chat/stream", methods=["POST"])
+    @api_endpoint(limited=True)
+    def chat_stream():
+        """Server-sent events: ``meta`` (citations), many ``token``, then ``done`` or ``error``."""
+        _message, hits, prompt = _chat_inputs()
+        tokens = stream_content(prompt, system=SYSTEM_INSTRUCTION)
+
+        def events():
+            yield _sse("meta", {"sources": _citations(hits)})
+            parts: list[str] = []
+            try:
+                for piece in tokens:
+                    parts.append(piece)
+                    yield _sse("token", {"text": piece})
+            except KnowledgeForgeError as exc:
+                yield _sse("error", {"message": str(exc), "status": exc.status})
+                return
+            except Exception:
+                logger.exception("chat stream failed")
+                yield _sse("error", {"message": "The answer stream was interrupted. Please try again.", "status": 500})
+                return
+            answer = "".join(parts)
+            cites = _citations(hits, answer)
+            yield _sse("done", {"answer": answer, "sources": cites, "grounded": any(c["cited"] for c in cites)})
+
+        return Response(
+            stream_with_context(events()),
+            mimetype="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
 
     @app.route("/api/chat/clear", methods=["POST"])
     def clear_chat():
@@ -343,31 +547,33 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
 
     # ── Learning tools ─────────────────────────────────────────────────────
     @app.route("/api/summarize", methods=["POST"])
-    @api_endpoint
+    @api_endpoint(limited=True)
     def summarize():
-        source = _opt_str(_json_body(), "source")
-        pool = get_kb().list_chunks(source)
+        k = get_kb()
+        source = _scope(k, _json_body())
+        pool = k.list_chunks(source)
         if not pool:
             return _error("No content to summarize yet. Add a source first.", 404)
         ensure_gemini_configured()
-        text = " ".join(c["text"] for c in pool[:30])
+        text = _balanced_text(pool, get_settings().summary_max_chars)
         return jsonify({
             "success": True,
             "type": "summary",
             "title": f"Summary of {source}" if source else "Summary of all sources",
-            "content": generate_content(summary_prompt(text)),
+            "content": generate_content(summary_prompt(text), system=SYSTEM_INSTRUCTION),
         })
 
     @app.route("/api/generate-tool-content", methods=["POST"])
-    @api_endpoint
+    @api_endpoint(limited=True)
     def generate_tool_content():
         data = _json_body()
         tool = _opt_str(data, "tool")
-        topic = _required_str(data, "topic", "Topic", 300)
-        source = _opt_str(data, "source")
         if tool not in TOOLS:
-            raise ValidationError("Invalid tool specified.")
+            raise ValidationError(f"Invalid tool. Use one of: {', '.join(TOOLS)}.")
+        tool = TOOL_ALIASES.get(tool, tool)
+        topic = _required_str(data, "topic", "Topic", get_settings().tool_topic_max_chars)
         k = get_kb()
+        source = _scope(k, data)
         if k.count() == 0:
             return _error("Knowledge base is empty. Add a web page, document or video first.", 422)
         ensure_gemini_configured()
@@ -375,53 +581,60 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
         if not hits:
             return _error("No relevant content found for this topic. Try another topic or add sources.", 404)
         context = "\n\n".join(h["text"] for h in hits)
-        raw = generate_content(tool_prompt(tool, topic, context))
+        prompt = tool_prompt(tool, topic, context)
         title = f"{tool.replace('_', ' ').title()}: {topic}"
         payload = {"success": True, "type": tool, "title": title, "sources": _citations(hits)}
         if tool in ("mindmap", "flowchart"):
-            payload["mermaid_code"] = sanitize_mermaid(clean_llm_output(raw, "mermaid"))
-        elif tool in ("storyboard", "flashcards"):
-            content = parse_json_output(raw)
-            if not isinstance(content, list):
-                raise IngestionError("The model returned an unexpected format. Please try again.")
-            payload["content"] = [c for c in content if isinstance(c, dict)]
+            raw = generate_content(prompt, system=SYSTEM_INSTRUCTION)
+            payload["mermaid_code"] = normalize_mermaid(raw, tool)
+        elif tool in JSON_TOOLS:
+            payload["content"] = _structured(tool, prompt)
         else:
-            payload["content"] = raw
+            payload["content"] = generate_content(prompt, system=SYSTEM_INSTRUCTION)
         return jsonify(payload)
 
     @app.route("/api/extract-entities", methods=["POST"])
-    @api_endpoint
+    @api_endpoint(limited=True)
     def extract_entities():
-        source = _opt_str(_json_body(), "source")
-        text = " ".join(c["text"] for c in get_kb().list_chunks(source))
-        if not text:
+        k = get_kb()
+        source = _scope(k, _json_body())
+        pool = k.list_chunks(source)
+        if not pool:
             return _error("No content available yet. Add a source first.", 404)
         ensure_gemini_configured()
-        entities = parse_json_output(generate_content(entities_prompt(text[:6000])))
+        text = _balanced_text(pool, get_settings().entity_max_chars)
+        raw = generate_content(entities_prompt(text), system=SYSTEM_INSTRUCTION, json_mode=True)
+        try:
+            entities = parse_json_output(raw)
+        except LLMError:
+            entities = {}
         if not isinstance(entities, dict):
             entities = {}
         clean = {
-            str(cat): sorted({str(e).strip() for e in items if str(e).strip()})
+            str(cat)[:40]: sorted(
+                {str(e).strip()[:120] for e in items if isinstance(e, (str, int, float)) and str(e).strip()}
+            )
             for cat, items in entities.items()
             if isinstance(items, list)
         }
         return jsonify({"success": True, "entities": clean})
 
     @app.route("/api/cluster-topics", methods=["GET"])
-    @api_endpoint
+    @api_endpoint(limited=True)
     def cluster_topics():
         k = get_kb()
-        if k.count() < 5:
-            return _error("Need at least 5 content chunks to cluster. Add more content first.", 400)
+        minimum = get_settings().cluster_min_chunks
+        if k.count() < minimum:
+            return _error(f"Need at least {minimum} content chunks to cluster. Add more content first.", 400)
         ensure_gemini_configured()
         chunks, embeddings = k.get_embeddings_for_clustering()
-        image, labels = render_cluster_plot(chunks, embeddings)
+        image, labels = render_cluster_plot(chunks, embeddings, get_settings().cluster_max_topics)
         return jsonify({"success": True, "image": image, "labels": labels})
 
     return app
 
 
-def render_cluster_plot(chunks: list[dict], embeddings: np.ndarray) -> tuple[str, list[str]]:
+def render_cluster_plot(chunks: list[dict], embeddings: np.ndarray, max_topics: int = 5) -> tuple[str, list[str]]:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -429,7 +642,7 @@ def render_cluster_plot(chunks: list[dict], embeddings: np.ndarray) -> tuple[str
     from sklearn.cluster import KMeans
     from sklearn.decomposition import PCA
 
-    n_clusters = max(2, min(5, embeddings.shape[0] // 2))
+    n_clusters = max(2, min(max_topics, embeddings.shape[0] // 2))
     km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10).fit(embeddings)
     labels = []
     for i in range(n_clusters):
@@ -441,11 +654,13 @@ def render_cluster_plot(chunks: list[dict], embeddings: np.ndarray) -> tuple[str
             labels.append(f"Topic {i + 1}")
     reduced = PCA(n_components=2).fit_transform(embeddings)
 
-    palette = ["#4f46e5", "#0891b2", "#059669", "#d97706", "#dc2626"]
+    palette = [
+        "#4f46e5", "#0891b2", "#059669", "#d97706", "#dc2626", "#7c3aed", "#db2777", "#65a30d", "#0d9488", "#ea580c",
+    ]
     fig, ax = plt.subplots(figsize=(9, 6.5))
     for i in range(n_clusters):
         mask = km.labels_ == i
-        ax.scatter(reduced[mask, 0], reduced[mask, 1], s=90, alpha=0.85, color=palette[i],
+        ax.scatter(reduced[mask, 0], reduced[mask, 1], s=90, alpha=0.85, color=palette[i % len(palette)],
                    edgecolors="white", linewidths=0.6, label=labels[i])
     ax.set_title("Topic clusters in your knowledge base", fontsize=14, fontweight="bold")
     ax.set_xticks([])
@@ -460,13 +675,4 @@ def render_cluster_plot(chunks: list[dict], embeddings: np.ndarray) -> tuple[str
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}", labels
 
 
-def _configure_logging() -> None:
-    if not logging.getLogger().handlers:
-        logging.basicConfig(
-            level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        )
-
-
-_configure_logging()
-
+configure_logging()
