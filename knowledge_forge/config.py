@@ -121,6 +121,14 @@ class Settings:
     crawl_respect_robots: bool = True
     crawl_user_agent: str = "KnowledgeForge/2 (+https://github.com/nisaral/Knowledge_forge)"
     allow_private_urls: bool = False
+    # Whole-site crawler
+    crawl_site_max_pages: int = 200  # hard cap a request may ask for
+    crawl_site_default_pages: int = 30
+    crawl_site_max_depth: int = 5
+    crawl_site_concurrency: int = 2
+    crawl_site_delay_seconds: float = 1.0
+    crawl_site_max_jobs: int = 2
+    crawl_site_max_sitemap_urls: int = 5000
     # Headless-browser rendering for JavaScript pages (needs the optional "js" extra)
     render_js: str = "never"  # auto | always | never
     render_js_timeout_seconds: int = 20
@@ -258,6 +266,13 @@ class Settings:
                 "CRAWL_USER_AGENT", "KnowledgeForge/2 (+https://github.com/nisaral/Knowledge_forge)"
             ),
             allow_private_urls=_bool_env("ALLOW_PRIVATE_URLS", False),
+            crawl_site_max_pages=_int_env("CRAWL_SITE_MAX_PAGES", 200, minimum=1),
+            crawl_site_default_pages=_int_env("CRAWL_SITE_DEFAULT_PAGES", 30, minimum=1),
+            crawl_site_max_depth=_int_env("CRAWL_SITE_MAX_DEPTH", 5, minimum=0),
+            crawl_site_concurrency=_int_env("CRAWL_SITE_CONCURRENCY", 2, minimum=1),
+            crawl_site_delay_seconds=max(0.0, _float_env("CRAWL_SITE_DELAY_SECONDS", 1.0)),
+            crawl_site_max_jobs=_int_env("CRAWL_SITE_MAX_JOBS", 2, minimum=1),
+            crawl_site_max_sitemap_urls=_int_env("CRAWL_SITE_MAX_SITEMAP_URLS", 5000, minimum=1),
             render_js=render_js,
             render_js_timeout_seconds=_int_env("RENDER_JS_TIMEOUT_SECONDS", 20, minimum=2),
             render_js_max_concurrency=_int_env("RENDER_JS_MAX_CONCURRENCY", 2, minimum=1),

@@ -17,8 +17,9 @@ from flask import Flask, Response, g, jsonify, render_template, request, stream_
 
 from knowledge_forge import __version__, js_render
 from knowledge_forge.cache import redis_health_check
-from knowledge_forge.chunking import chunk_text, content_hash, normalize_text
+from knowledge_forge.chunking import content_hash, normalize_text
 from knowledge_forge.config import flask_secret, get_settings
+from knowledge_forge.crawler import get_crawl_manager, store_text
 from knowledge_forge.errors import (
     MISSING_KEY_MESSAGE,
     IngestionError,
@@ -33,6 +34,7 @@ from knowledge_forge.ingestion import (
     ingest_file_via_gemini,
     ingest_pdf_bytes,
     ingest_text_source,
+    resolve_render_mode,
     safe_filename,
     sniff_file_type,
 )
@@ -215,13 +217,8 @@ def _note_label(text: str, title: str | None) -> str:
 
 def _ingest(kb: KnowledgeBase, text: str | None, source: str, source_type: str, metadata=None):
     settings = get_settings()
-    text = normalize_text(text or "")
-    if not text:
-        raise IngestionError("No readable text could be extracted from this source.")
-    truncated = len(text) > settings.max_text_chars
-    text = text[: settings.max_text_chars]
-    chunks = chunk_text(text, settings.chunk_size, settings.chunk_overlap)
-    added, removed = kb.sync_source(chunks, source, source_type, metadata=metadata, replace=True)
+    res = store_text(kb, text or "", source, source_type, metadata)
+    added, removed, truncated = res["added"], res["removed"], res["truncated"]
     if added and removed:
         message = f"Updated {source_type} source: {added} new chunk{'s' if added != 1 else ''}, {removed} removed."
     elif added:
@@ -237,7 +234,7 @@ def _ingest(kb: KnowledgeBase, text: str | None, source: str, source_type: str, 
         "message": message,
         "chunks_added": added,
         "chunks_removed": removed,
-        "chunks_total": len(chunks),
+        "chunks_total": res["total"],
         "source": source,
         "source_type": source_type,
     })
@@ -282,6 +279,28 @@ def _structured(tool: str, prompt: str) -> list[dict]:
     if not items:
         raise LLMError("The model returned an unexpected format. Please try again.")
     return items
+
+
+def _opt_int(data: dict, key: str, default: int, lo: int, hi: int) -> int:
+    value = data.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValidationError(f"'{key}' must be a number.")
+    try:
+        value = int(value)
+    except ValueError as exc:
+        raise ValidationError(f"'{key}' must be a number.") from exc
+    if not lo <= value <= hi:
+        raise ValidationError(f"'{key}' must be between {lo} and {hi}.")
+    return value
+
+
+def _opt_bool(data: dict, key: str, default: bool) -> bool:
+    value = data.get(key, default)
+    if not isinstance(value, bool):
+        raise ValidationError(f"'{key}' must be true or false.")
+    return value
 
 
 def _sse(event: str, data) -> str:
@@ -470,6 +489,70 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
         return _ingest(get_kb(), text, filename, source_type, metadata={"filename": filename})
 
     # ── Q&A and chat ────────────────────────────────────────────────────────
+    # ── Whole-site crawl ───────────────────────────────────────────────────
+    @app.route("/api/crawl", methods=["GET"])
+    @api_endpoint
+    def crawl_list():
+        return jsonify({"success": True, "jobs": get_crawl_manager().list()})
+
+    @app.route("/api/crawl", methods=["POST"])
+    @api_endpoint(limited=True)
+    def crawl_start():
+        data = _json_body()
+        s = get_settings()
+        url = _required_str(data, "url", "URL", 2000)
+        render_js = resolve_render_mode(_opt_str(data, "render_js", 10))
+        prefix = _opt_str(data, "path_prefix", 300) or "/"
+        if not prefix.startswith("/"):
+            raise ValidationError("'path_prefix' must start with '/'.")
+        ensure_gemini_configured()
+        job = get_crawl_manager().start(
+            get_kb(), url,
+            max_pages=_opt_int(data, "max_pages", min(s.crawl_site_default_pages, s.crawl_site_max_pages), 1,
+                               s.crawl_site_max_pages),
+            max_depth=_opt_int(data, "max_depth", min(2, s.crawl_site_max_depth), 0, s.crawl_site_max_depth),
+            include_subdomains=_opt_bool(data, "include_subdomains", False),
+            use_sitemap=_opt_bool(data, "use_sitemap", True),
+            render_js=render_js,
+            path_prefix=prefix,
+        )
+        return jsonify({"success": True, "job": job.snapshot()}), 202
+
+    @app.route("/api/crawl/<job_id>", methods=["GET"])
+    @api_endpoint
+    def crawl_status(job_id):
+        return jsonify({"success": True, "job": get_crawl_manager().get(job_id[:40]).snapshot()})
+
+    @app.route("/api/crawl/<job_id>/cancel", methods=["POST"])
+    @api_endpoint
+    def crawl_cancel(job_id):
+        job = get_crawl_manager().get(job_id[:40])
+        job.cancel()
+        return jsonify({"success": True, "job": job.snapshot(include_pages=False)})
+
+    @app.route("/api/crawl/<job_id>/retry", methods=["POST"])
+    @api_endpoint(limited=True)
+    def crawl_retry(job_id):
+        job = get_crawl_manager().get(job_id[:40])
+        data = request.get_json(silent=True) or {}
+        urls = data.get("urls") if isinstance(data, dict) else None
+        if urls is not None and (not isinstance(urls, list) or not all(isinstance(u, str) for u in urls)):
+            raise ValidationError("'urls' must be a list of strings.")
+        n = job.retry(urls[:500] if urls else None)
+        if not n:
+            return _error("Nothing to retry.", 400)
+        return jsonify({"success": True, "retrying": n, "job": job.snapshot(include_pages=False)})
+
+    @app.route("/api/delete-group", methods=["POST"])
+    @api_endpoint
+    def delete_group():
+        group = _required_str(_json_body(), "group", "Group", 300)
+        removed, sources = get_kb().delete_group(group)
+        if not removed:
+            return _error("Group not found.", 404)
+        return jsonify({"success": True, "removed": removed, "sources": sources,
+                        "message": f"Removed {sources} pages ({removed} chunks)."})
+
     @app.route("/api/ask-question", methods=["POST"])
     @api_endpoint(limited=True)
     def ask_question():

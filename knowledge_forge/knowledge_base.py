@@ -66,7 +66,7 @@ class KnowledgeBase:
         self._bm25 = None
         self._bm25_key = None
 
-    def _bm25_for(self, pool: list[dict], source_filter: str | None) -> BM25Okapi:
+    def _bm25_for(self, pool: list[dict], source_filter) -> BM25Okapi:
         key = (self._cache_version, source_filter, len(pool))
         if self._bm25 is None or self._bm25_key != key:
             self._bm25 = BM25Okapi([tokenize(c["text"]) or ["_"] for c in pool])
@@ -87,10 +87,15 @@ class KnowledgeBase:
         with self._lock:
             sources: dict[str, dict] = {}
             for c in self._all_chunks():
-                entry = sources.setdefault(
-                    c["source"],
-                    {"source": c["source"], "type": c.get("source_type", "text"), "chunks": 0},
-                )
+                entry = sources.get(c["source"])
+                if entry is None:
+                    meta = c.get("metadata") or {}
+                    entry = sources[c["source"]] = {
+                        "source": c["source"], "type": c.get("source_type", "text"), "chunks": 0,
+                    }
+                    for key in ("group", "site", "title"):
+                        if meta.get(key):
+                            entry[key] = str(meta[key])
                 entry["chunks"] += 1
             return list(sources.values())
 
@@ -185,6 +190,18 @@ class KnowledgeBase:
                 self._invalidate()
             return removed
 
+    def delete_group(self, group: str) -> tuple[int, int]:
+        """Delete every chunk whose ``metadata.group`` is ``group``; returns ``(chunks, sources)``."""
+        if not group:
+            return 0, 0
+        with self._lock:
+            hits = [c for c in self._all_chunks() if (c.get("metadata") or {}).get("group") == group]
+            if not hits:
+                return 0, 0
+            removed = self._store.delete_ids([c["id"] for c in hits])
+            self._invalidate()
+            return removed, len({c["source"] for c in hits})
+
     def clear(self) -> None:
         with self._lock:
             self._store.clear()
@@ -193,32 +210,59 @@ class KnowledgeBase:
             logger.info("Knowledge base cleared.")
 
     # ─── Retrieval ──────────────────────────────────────────────────────────
-    def hybrid_search(self, query: str, source_filter: str | None = None, k: int | None = None) -> list[dict]:
-        """Return up to ``k`` chunk dicts (with ``score``) most relevant to ``query``."""
+    def scored_candidates(self, query: str, sources: set[str] | None = None, limit: int | None = None) -> list[dict]:
+        """Fused BM25 + semantic candidates restricted to ``sources`` (None = all).
+
+        Each result is a chunk dict plus ``score`` (fused), ``semantic`` and ``keyword``
+        (BM25 normalised to the best match) so callers can explain the ranking.
+        """
         settings = get_settings()
-        k = k or settings.top_k_final
+        limit = limit or settings.top_k_coarse
+        key = None if sources is None else frozenset(sources)
         with self._lock:
-            pool = self.list_chunks(source_filter)
+            chunks = self._all_chunks()
+            pool = chunks if key is None else [c for c in chunks if c["source"] in key]
             if not pool:
                 return []
-            bm25 = self._bm25_for(pool, source_filter)
+            bm25 = self._bm25_for(pool, key)
+            total = len(chunks)
 
         q_vec = gemini_embed_query(query)
+        single = next(iter(key)) if key is not None and len(key) == 1 else None
+        # With a multi-source filter, over-fetch and filter so restricted sources are not starved.
+        sem_k = limit if key is None or single else min(total, max(limit * 10, 200))
         with self._lock:
-            sem_hits = self._store.semantic_search(q_vec, source_filter, settings.top_k_coarse)
+            sem_hits = self._store.semantic_search(q_vec, single, sem_k)
+        if key is not None:
+            sem_hits = [h for h in sem_hits if h.get("source") in key]
         semantic = {h["id"]: max(0.0, float(h["score"])) for h in sem_hits}
 
-        raw = bm25.get_scores(tokenize(query)) if tokenize(query) else np.zeros(len(pool))
+        tokens = tokenize(query)
+        raw = bm25.get_scores(tokens) if tokens else np.zeros(len(pool))
         top = float(np.max(raw)) if len(raw) else 0.0
         keyword = {pool[i]["id"]: float(raw[i]) / top for i in range(len(pool)) if top > 0 and raw[i] > 0}
 
         ranked = fuse_scores(semantic, keyword, settings.semantic_weight, settings.bm25_weight)
         by_id = {c["id"]: c for c in pool}
         by_id.update({h["id"]: h for h in sem_hits if h["id"] not in by_id})
-        candidates = [
-            {**{key: v for key, v in by_id[cid].items() if key != "score"}, "score": round(score, 4)}
-            for cid, score in ranked[: settings.top_k_coarse]
+        return [
+            {
+                **{f: v for f, v in by_id[cid].items() if f != "score"},
+                "score": round(score, 4),
+                "semantic": round(semantic.get(cid, 0.0), 4),
+                "keyword": round(keyword.get(cid, 0.0), 4),
+            }
+            for cid, score in ranked[:limit]
             if cid in by_id and score >= settings.min_relevance
+        ]
+
+    def hybrid_search(self, query: str, source_filter: str | None = None, k: int | None = None) -> list[dict]:
+        """Return up to ``k`` chunk dicts (with ``score``) most relevant to ``query``."""
+        settings = get_settings()
+        k = k or settings.top_k_final
+        candidates = [
+            {f: v for f, v in c.items() if f not in ("semantic", "keyword")}
+            for c in self.scored_candidates(query, {source_filter} if source_filter else None)
         ]
 
         if settings.rerank and len(candidates) > k:

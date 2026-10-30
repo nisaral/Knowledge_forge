@@ -199,14 +199,20 @@ def _html_to_text(body: bytes | str) -> str:
     return " ".join((main or soup).stripped_strings)
 
 
-def _fetch_static(url: str) -> tuple[bytes | None, str, str, str]:
-    """Fetch ``url`` with redirect re-validation. Returns ``(body, ctype, encoding, error)``."""
+def fetch_url(url: str, allowed_types=_HTML_TYPES, max_bytes: int | None = None, accept: str | None = None,
+              hop_check=None) -> dict:
+    """GET ``url`` following redirects hop by hop, re-validating every hop.
+
+    Returns ``{"body", "ctype", "encoding", "url" (final), "error"}``; ``body`` is None on error.
+    ``hop_check(url)`` may return an error string to stop at a redirect target (e.g. off-site).
+    """
     settings = get_settings()
     headers = {
         "User-Agent": settings.crawl_user_agent,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.1",
+        "Accept": accept or "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.1",
         "Accept-Language": "en-US,en;q=0.9",
     }
+    out = {"body": None, "ctype": "", "encoding": "", "url": url, "error": ""}
     resp = None
     try:
         for _hop in range(settings.crawl_max_redirects + 1):
@@ -217,31 +223,52 @@ def _fetch_static(url: str) -> tuple[bytes | None, str, str, str]:
                 break
             resp.close()
             url = urljoin(url, location)
+            out["url"] = url
+            if hop_check is not None:
+                problem = hop_check(url)
+                if problem:
+                    out["error"] = problem
+                    return out
             problem = validate_public_url(url)
             if problem:
                 logger.warning("Blocked redirect to a non-public URL")
-                return None, "", "", problem
+                out["error"] = problem
+                return out
         else:
-            return None, "", "", "The page redirected too many times."
+            out["error"] = "The page redirected too many times."
+            return out
         if resp.status_code >= 400:
-            return None, "", "", f"The site responded with HTTP {resp.status_code}."
+            out["error"] = f"The site responded with HTTP {resp.status_code}."
+            return out
         ctype = (resp.headers.get("content-type") or "text/html").split(";")[0].strip().lower()
-        if ctype not in _HTML_TYPES:
-            return None, ctype, "", f"Unsupported content type '{ctype[:60]}'. Upload files with the File tab."
-        body = _read_capped(resp, settings.crawl_max_bytes)
-        return body, ctype, resp.encoding or "utf-8", ""
+        out["ctype"] = ctype
+        if ctype not in allowed_types:
+            out["error"] = f"Unsupported content type '{ctype[:60]}'. Upload files with the File tab."
+            return out
+        out["body"] = _read_capped(resp, max_bytes or settings.crawl_max_bytes)
+        out["encoding"] = resp.encoding or "utf-8"
+        return out
     except IngestionError as exc:
-        return None, "", "", str(exc)
+        out["error"] = str(exc)
     except requests.exceptions.Timeout:
-        return None, "", "", "The site took too long to respond."
+        out["error"] = "The site took too long to respond."
     except requests.exceptions.RequestException as exc:
         if _BLOCKED_MARKER in repr(exc):
-            return None, "", "", PRIVATE_URL_MESSAGE
-        logger.warning("Error crawling URL: %s", type(exc).__name__)
-        return None, "", "", "Could not connect to the site."
+            out["error"] = PRIVATE_URL_MESSAGE
+        else:
+            logger.warning("Error crawling URL: %s", type(exc).__name__)
+            out["error"] = "Could not connect to the site."
     finally:
         if resp is not None:
             resp.close()
+    out["body"] = None
+    return out
+
+
+def _fetch_static(url: str) -> tuple[bytes | None, str, str, str]:
+    """Fetch ``url`` with redirect re-validation. Returns ``(body, ctype, encoding, error)``."""
+    r = fetch_url(url)
+    return r["body"], r["ctype"], r["encoding"], r["error"]
 
 
 _ROBOTS_CACHE: dict[str, tuple[float, object]] = {}
@@ -251,12 +278,8 @@ _SITEMAP_RE = re.compile(rb"<(?:\w+:)?(?:urlset|sitemapindex)[\s>]")
 ROBOTS_MESSAGE = "The site's robots.txt does not allow crawling this page."
 
 
-def robots_allowed(url: str) -> bool:
-    """RFC 9309 check of ``url`` against its origin's robots.txt (cached for an hour).
-
-    4xx means no rules; 5xx or an unreachable robots.txt is treated as "allow" so a flaky
-    robots server does not block the page fetch, which has its own error handling.
-    """
+def robots_parser(url: str):
+    """Parsed robots.txt for ``url``'s origin (cached for an hour); see :func:`robots_allowed`."""
     import urllib.robotparser
 
     settings = get_settings()
@@ -282,7 +305,16 @@ def robots_allowed(url: str) -> bool:
             _ROBOTS_CACHE.clear()
         _ROBOTS_CACHE[origin] = (now, parser)
         cached = _ROBOTS_CACHE[origin]
-    return cached[1].can_fetch(settings.crawl_user_agent, url)
+    return cached[1]
+
+
+def robots_allowed(url: str) -> bool:
+    """RFC 9309 check of ``url`` against its origin's robots.txt (cached for an hour).
+
+    4xx means no rules; 5xx or an unreachable robots.txt is treated as "allow" so a flaky
+    robots server does not block the page fetch, which has its own error handling.
+    """
+    return robots_parser(url).can_fetch(get_settings().crawl_user_agent, url)
 
 
 def resolve_render_mode(requested: str | None) -> str:
