@@ -109,6 +109,7 @@ All settings come from environment variables. `.env.example` lists them all.
 | `RENDER_JS` | `never` | `auto` renders a page in headless Chromium when the static HTML has little text or is a SPA shell; `always` renders every page. See [JavaScript rendering](#javascript-rendering) |
 | `RENDER_JS_TIMEOUT_SECONDS` / `RENDER_JS_MAX_CONCURRENCY` / `RENDER_JS_MAX_REQUESTS` | `20` / `2` / `150` | Per page deadline, simultaneous browser pages, subrequests per page |
 | `RENDER_JS_SETTLE_MS` / `RENDER_JS_MIN_CHARS` / `RENDER_JS_BROWSER_PATH` | `1500` / `500` / – | Wait for network idle; `auto` threshold; optional Chromium/Chrome binary |
+| `CRAWL_RESPECT_ROBOTS` | `true` | Refuse pages that the site's robots.txt disallows for `CRAWL_USER_AGENT` |
 | `CRAWL_USER_AGENT` | `KnowledgeForge/2 (+repo URL)` | |
 | `YOUTUBE_LANGUAGES` | `en,en-US,en-GB` | Transcript language preference |
 | `YOUTUBE_METADATA_FALLBACK` | `false` | When a video has no transcript, ask Gemini to describe it (may be inaccurate) |

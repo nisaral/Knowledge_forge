@@ -244,6 +244,47 @@ def _fetch_static(url: str) -> tuple[bytes | None, str, str, str]:
             resp.close()
 
 
+_ROBOTS_CACHE: dict[str, tuple[float, object]] = {}
+_ROBOTS_TTL = 3600.0
+_ROBOTS_MAX_BYTES = 512 * 1024
+_SITEMAP_RE = re.compile(rb"<(?:\w+:)?(?:urlset|sitemapindex)[\s>]")
+ROBOTS_MESSAGE = "The site's robots.txt does not allow crawling this page."
+
+
+def robots_allowed(url: str) -> bool:
+    """RFC 9309 check of ``url`` against its origin's robots.txt (cached for an hour).
+
+    4xx means no rules; 5xx or an unreachable robots.txt is treated as "allow" so a flaky
+    robots server does not block the page fetch, which has its own error handling.
+    """
+    import urllib.robotparser
+
+    settings = get_settings()
+    parts = urlparse(url)
+    origin = f"{parts.scheme}://{parts.netloc}"
+    now = time.monotonic()
+    cached = _ROBOTS_CACHE.get(origin)
+    if cached is None or now - cached[0] > _ROBOTS_TTL:
+        parser = urllib.robotparser.RobotFileParser()
+        lines: list[str] = []
+        try:
+            resp = _http_get(origin + "/robots.txt", headers={"User-Agent": settings.crawl_user_agent},
+                             timeout=min(10, settings.crawl_timeout_seconds), stream=True)
+            try:
+                if resp.status_code < 300:
+                    lines = _read_capped(resp, _ROBOTS_MAX_BYTES).decode("utf-8", "replace").splitlines()
+            finally:
+                resp.close()
+        except (requests.RequestException, IngestionError):
+            logger.info("robots.txt unavailable; allowing")
+        parser.parse(lines)
+        if len(_ROBOTS_CACHE) > 512:
+            _ROBOTS_CACHE.clear()
+        _ROBOTS_CACHE[origin] = (now, parser)
+        cached = _ROBOTS_CACHE[origin]
+    return cached[1].can_fetch(settings.crawl_user_agent, url)
+
+
 def resolve_render_mode(requested: str | None) -> str:
     """Combine the server's RENDER_JS setting with a per-request override.
 
@@ -279,16 +320,21 @@ def crawl_url_detailed(url: str, render_js: str | None = None) -> tuple[str | No
         mode = resolve_render_mode(render_js)
     except IngestionError as exc:
         return None, str(exc)
+    if settings.crawl_respect_robots and not robots_allowed(url):
+        return None, ROBOTS_MESSAGE
 
     text, reason, html = "", "", b""
     if mode != "always":
         body, ctype, encoding, reason = _fetch_static(url)
+        if body is not None and ctype in ("application/xml", "text/xml") and _SITEMAP_RE.search(body[:4096]):
+            return None, "This is an XML sitemap, not a page. Add the pages it lists instead."
         if body is not None:
             html = body
             text = body.decode(encoding, errors="replace") if ctype == "text/plain" else _html_to_text(body)
             if ctype == "text/plain":
                 mode = "never"
-        elif mode == "never" or reason == PRIVATE_URL_MESSAGE or reason.startswith("Unsupported content type"):
+        else:
+            # HTTP errors, timeouts and size limits would hit the browser the same way.
             return None, reason
 
     if mode == "always" or (mode == "auto" and (not text or js_render.looks_like_spa(html, text))):
@@ -492,6 +538,19 @@ def ingest_text_source(source: str, source_type: str, render_js: str | None = No
     return None, f"Unknown source type: {stype}", stype
 
 
+PDF_DAMAGED_MESSAGE = "This PDF could not be read. It may be damaged or truncated."
+PDF_NO_TEXT_MESSAGE = ("This PDF has no text layer (it looks scanned or image-only) and OCR with Gemini "
+                       "did not return any text.")
+
+
+def _ocr_pdf(data: bytes) -> str | None:
+    try:
+        return ingest_pdf_via_gemini_bytes(data)
+    except ConfigurationError:
+        logger.info("PDF OCR skipped: Gemini is not configured")
+        return None
+
+
 def ingest_pdf_bytes(data: bytes) -> str | None:
     try:
         import pymupdf
@@ -502,16 +561,24 @@ def ingest_pdf_bytes(data: bytes) -> str | None:
             if doc.needs_pass:
                 raise IngestionError("This PDF is password protected. Remove the password and try again.")
             texts = [page.get_text("text") for page in doc]
-        raw = "\n".join(texts).strip()
-        # Very little text usually means a scanned PDF: fall back to Gemini OCR.
-        if len(raw) < get_settings().pdf_ocr_min_chars:
-            return ingest_pdf_via_gemini_bytes(data)
-        return raw
     except IngestionError:
         raise
     except Exception as exc:
         logger.error("PDF extraction error: %s", type(exc).__name__)
-        return ingest_pdf_via_gemini_bytes(data)
+        text = _ocr_pdf(data)
+        if not text:
+            raise IngestionError(PDF_DAMAGED_MESSAGE) from None
+        return text
+    raw = "\n".join(texts).strip()
+    # Very little text usually means a scanned PDF: try Gemini OCR, but keep a short real text layer
+    # (e.g. a one-line PDF) if OCR is unavailable or returns less.
+    if len(raw) < get_settings().pdf_ocr_min_chars:
+        ocr = _ocr_pdf(data)
+        if ocr and len(ocr.strip()) > len(raw):
+            return ocr
+        if not raw:
+            raise IngestionError(PDF_NO_TEXT_MESSAGE)
+    return raw
 
 
 def ingest_pdf_via_gemini_bytes(data: bytes) -> str | None:

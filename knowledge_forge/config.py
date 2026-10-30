@@ -118,6 +118,7 @@ class Settings:
     crawl_max_bytes: int = 5 * 1024 * 1024
     crawl_max_redirects: int = 5
     crawl_min_chars: int = 50
+    crawl_respect_robots: bool = True
     crawl_user_agent: str = "KnowledgeForge/2 (+https://github.com/nisaral/Knowledge_forge)"
     allow_private_urls: bool = False
     # Headless-browser rendering for JavaScript pages (needs the optional "js" extra)
@@ -252,6 +253,7 @@ class Settings:
             crawl_max_bytes=_int_env("CRAWL_MAX_BYTES", 5 * 1024 * 1024, minimum=10_000),
             crawl_max_redirects=_int_env("CRAWL_MAX_REDIRECTS", 5, minimum=0),
             crawl_min_chars=_int_env("CRAWL_MIN_CHARS", 50, minimum=1),
+            crawl_respect_robots=_bool_env("CRAWL_RESPECT_ROBOTS", True),
             crawl_user_agent=_str_env(
                 "CRAWL_USER_AGENT", "KnowledgeForge/2 (+https://github.com/nisaral/Knowledge_forge)"
             ),

@@ -30,6 +30,7 @@ def isolated_env(tmp_path, monkeypatch):
     monkeypatch.setenv("VECTOR_STORE", "local")
     monkeypatch.setenv("EMBED_DIM", str(DIM))
     monkeypatch.setenv("RERANK", "false")
+    monkeypatch.setenv("CRAWL_RESPECT_ROBOTS", "false")
     monkeypatch.setattr(config, "load_dotenv", None, raising=False)
     config.get_settings.cache_clear()
     cache.reset_cache_client()

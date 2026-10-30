@@ -1,9 +1,10 @@
 import socket
 
 import pytest
+import requests
 
 from knowledge_forge import ingestion
-from knowledge_forge.errors import IngestionError
+from knowledge_forge.errors import ConfigurationError, IngestionError
 
 
 @pytest.mark.parametrize(
@@ -211,3 +212,99 @@ def test_detect_file_type(name, mime, expected):
 def test_live_youtube_transcript():
     text, _detail = ingestion.get_youtube_transcript("https://www.youtube.com/watch?v=jNQXAC9IVRw")
     assert text
+
+
+# ── regressions from the live end-to-end run (docs/TESTING.md) ─────────────
+def test_short_text_pdf_kept_when_ocr_unavailable(monkeypatch):
+    def no_key(_d):
+        raise ConfigurationError("no key")
+
+    monkeypatch.setattr(ingestion, "ingest_pdf_via_gemini_bytes", no_key)
+    assert ingestion.ingest_pdf_bytes(_make_pdf("Dummy PDF file")) == "Dummy PDF file"
+    monkeypatch.setattr(ingestion, "ingest_pdf_via_gemini_bytes", lambda _d: None)
+    assert ingestion.ingest_pdf_bytes(_make_pdf("Dummy PDF file")) == "Dummy PDF file"
+
+
+def test_image_only_pdf_without_ocr_has_clear_error(monkeypatch):
+    monkeypatch.setattr(ingestion, "ingest_pdf_via_gemini_bytes", lambda _d: None)
+    with pytest.raises(IngestionError, match="no text layer"):
+        ingestion.ingest_pdf_bytes(_make_pdf(""))
+
+
+def test_corrupt_pdf_has_clear_error(monkeypatch):
+    monkeypatch.setattr(ingestion, "ingest_pdf_via_gemini_bytes", lambda _d: None)
+    with pytest.raises(IngestionError, match="damaged or truncated"):
+        ingestion.ingest_pdf_bytes(_make_pdf("x" * 500)[:300])
+
+
+def _static(monkeypatch, result):
+    monkeypatch.setattr(ingestion, "validate_public_url", lambda u: None)
+    monkeypatch.setattr(ingestion, "_fetch_static", lambda u: result)
+
+
+def test_auto_mode_does_not_render_after_size_or_http_error(monkeypatch):
+    from knowledge_forge import config, js_render
+
+    monkeypatch.setenv("RENDER_JS", "auto")
+    config.get_settings.cache_clear()
+    monkeypatch.setattr(js_render, "render_page", lambda u: pytest.fail("should not render"))
+    for reason in ("The page is larger than the 5120 KB crawl limit.", "The site responded with HTTP 404.",
+                   "The site took too long to respond."):
+        _static(monkeypatch, (None, "", "", reason))
+        assert ingestion.crawl_url_detailed("https://big.example") == (None, reason)
+
+
+def test_sitemap_xml_is_rejected_with_hint(monkeypatch):
+    body = (b'<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            b"<url><loc>https://a/</loc></url></urlset>")
+    _static(monkeypatch, (body, "application/xml", "utf-8", ""))
+    text, err = ingestion.crawl_url_detailed("https://example.com/sitemap.xml")
+    assert text is None and "sitemap" in err
+
+
+class _RobotsResp:
+    def __init__(self, status, body=b""):
+        self.status_code, self._body, self.headers = status, body, {}
+
+    def iter_content(self, chunk_size=1):
+        yield self._body
+
+    def close(self):
+        pass
+
+
+def test_robots_txt_respected(monkeypatch):
+    from knowledge_forge import config
+
+    monkeypatch.setenv("CRAWL_RESPECT_ROBOTS", "true")
+    config.get_settings.cache_clear()
+    ingestion._ROBOTS_CACHE.clear()
+    robots = b"User-agent: *\nDisallow: /wiki/Special:\n"
+    calls = []
+
+    def fake_get(url, **kw):
+        calls.append(kw["headers"]["User-Agent"])
+        return _RobotsResp(200, robots)
+
+    monkeypatch.setattr(ingestion, "_http_get", fake_get)
+    _static(monkeypatch, (b"<p>" + b"Allowed article text. " * 10 + b"</p>", "text/html", "utf-8", ""))
+    blocked = ingestion.crawl_url_detailed("https://w.example/wiki/Special:Search?q=x")
+    assert blocked == (None, ingestion.ROBOTS_MESSAGE)
+    assert ingestion.crawl_url_detailed("https://w.example/wiki/Photosynthesis")[0]
+    assert calls == [config.get_settings().crawl_user_agent]  # sent our UA, fetched once (cached)
+
+
+def test_robots_txt_missing_or_unreachable_allows(monkeypatch):
+    from knowledge_forge import config
+
+    monkeypatch.setenv("CRAWL_RESPECT_ROBOTS", "true")
+    config.get_settings.cache_clear()
+    ingestion._ROBOTS_CACHE.clear()
+    monkeypatch.setattr(ingestion, "_http_get", lambda url, **kw: _RobotsResp(404))
+    assert ingestion.robots_allowed("https://a.example/x")
+
+    def boom(url, **kw):
+        raise requests.ConnectionError("down")
+
+    monkeypatch.setattr(ingestion, "_http_get", boom)
+    assert ingestion.robots_allowed("https://b.example/x")
