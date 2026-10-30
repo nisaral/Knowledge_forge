@@ -8,19 +8,27 @@ transcripts, pasted text, PDFs, Markdown, audio, video and images), then chat wi
 answers. It can also produce summaries, flashcards, quizzes, Mermaid flowcharts, entity lists and topic
 clusters. Gemini handles embeddings and generation.
 
-![Chat with citations](docs/screenshot-chat.png)
+![Streaming chat with citation preview](docs/screenshot-chat-light.png)
 
-| Study tools (dark) | Mobile |
-|---|---|
-| ![Study tools](docs/screenshot-tools-dark.png) | ![Mobile](docs/screenshot-mobile.png) |
+| Quiz with scoring (dark) | Flowchart viewer | Flashcards |
+|---|---|---|
+| ![Quiz](docs/screenshot-quiz-dark.png) | ![Flowchart](docs/screenshot-flowchart-light.png) | ![Flashcards](docs/screenshot-flashcards-dark.png) |
+
+| Mobile (360 px) | Mobile sidebar | Tablet (768 px) |
+|---|---|---|
+| ![Mobile](docs/screenshot-mobile.png) | ![Mobile sidebar](docs/screenshot-mobile-sidebar.png) | ![Tablet](docs/screenshot-tablet.png) |
+
+The screenshots use a demo server with a mocked model, so the answers in them are illustrative.
 
 ## Features
 
 - **Ingestion:** web pages (SSRF-guarded, re-checked on every redirect), YouTube transcripts, text, `.txt`/`.md`, PDFs (PyMuPDF, with a Gemini fallback for scanned files), and audio, video and images (Gemini file API).
 - **Hybrid retrieval:** BM25 and dense (FAISS or Qdrant) scores are fused with weights. An optional Gemini re-rank step follows. Chunks are deduplicated by content hash.
 - **Grounded chat:** answers carry `[n]` citations that link to source snippets. Multi-turn history is stored in the browser (localStorage), and you can scope a chat to a single source.
-- **Study tools:** summary, flashcards, quiz, Mermaid flowchart, entity extraction and topic clustering (k-means plot).
-- **UI:** vanilla JS with no build step. It includes light and dark themes, drag-and-drop upload, toasts, skeleton loaders and a responsive mobile drawer. Markdown is rendered XSS-safely, and Mermaid runs with `securityLevel: strict`.
+- **Study tools:** summary; a scored multiple-choice quiz with explanations and review (`mock_test` is an alias); a flip-card flashcard deck with progress, shuffle and keyboard control; Mermaid flowcharts and mind maps with zoom, pan, fit, and SVG/PNG export; storyboard; study plan; entity extraction and topic clustering (k-means plot).
+- **Chat UI:** answers stream token by token over Server-Sent Events (`/api/chat/stream`), and you can stop them. Each message has copy and regenerate buttons and a timestamp. Hovering or focusing a `[n]` citation previews its passage. Passages the answer did not cite are dimmed, and an answer that cites none is flagged "Not from your sources". Suggested questions are built from your latest sources. The view scrolls with the stream only while you are at the bottom; otherwise a "Latest" button appears.
+- **UI:** vanilla JS with no build step. It has light and dark themes (the choice is saved and defaults to the system setting), drag-and-drop upload, toasts, skeleton loaders, and empty and error states with retry. Layouts are responsive from 360 px phones to desktops. It includes a skip link, ARIA tabs, live regions and labelled controls. Markdown is rendered XSS-safely, Mermaid runs with `securityLevel: strict`, and there are no inline scripts, so the CSP `script-src 'self'` holds.
+- **Keyboard shortcuts:** `/` focuses the composer, `Ctrl/⌘+K` adds a link, `Alt+1..3` switches tabs, `Esc` stops generation, `Space` and `←`/`→` drive the flashcards, and `?` lists all the shortcuts.
 
 ## Architecture
 
