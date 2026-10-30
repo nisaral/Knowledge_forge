@@ -177,6 +177,7 @@ def _http_request(method: str, url: str, **kwargs) -> requests.Response:
 
 
 _HTML_TYPES = ("text/html", "application/xhtml+xml", "text/plain", "application/xml", "text/xml")
+_PDF_TYPES = ("application/pdf", "application/x-pdf")
 
 
 def _read_capped(resp, limit: int) -> bytes:
@@ -200,7 +201,7 @@ def _html_to_text(body: bytes | str) -> str:
 
 
 def fetch_url(url: str, allowed_types=_HTML_TYPES, max_bytes: int | None = None, accept: str | None = None,
-              hop_check=None) -> dict:
+              hop_check=None, pdf_max_bytes: int | None = None) -> dict:
     """GET ``url`` following redirects hop by hop, re-validating every hop.
 
     Returns ``{"body", "ctype", "encoding", "url" (final), "error"}``; ``body`` is None on error.
@@ -245,7 +246,10 @@ def fetch_url(url: str, allowed_types=_HTML_TYPES, max_bytes: int | None = None,
         if ctype not in allowed_types:
             out["error"] = f"Unsupported content type '{ctype[:60]}'. Upload files with the File tab."
             return out
-        out["body"] = _read_capped(resp, max_bytes or settings.crawl_max_bytes)
+        cap = max_bytes or settings.crawl_max_bytes
+        if pdf_max_bytes and ctype in _PDF_TYPES:
+            cap = pdf_max_bytes
+        out["body"] = _read_capped(resp, cap)
         out["encoding"] = resp.encoding or "utf-8"
         return out
     except IngestionError as exc:
@@ -267,7 +271,8 @@ def fetch_url(url: str, allowed_types=_HTML_TYPES, max_bytes: int | None = None,
 
 def _fetch_static(url: str) -> tuple[bytes | None, str, str, str]:
     """Fetch ``url`` with redirect re-validation. Returns ``(body, ctype, encoding, error)``."""
-    r = fetch_url(url)
+    settings = get_settings()
+    r = fetch_url(url, allowed_types=_HTML_TYPES + _PDF_TYPES, pdf_max_bytes=settings.max_upload_bytes)
     return r["body"], r["ctype"], r["encoding"], r["error"]
 
 
@@ -358,6 +363,14 @@ def crawl_url_detailed(url: str, render_js: str | None = None) -> tuple[str | No
     text, reason, html = "", "", b""
     if mode != "always":
         body, ctype, encoding, reason = _fetch_static(url)
+        if body is not None and (ctype in _PDF_TYPES or body[:5] == b"%PDF-"):
+            try:
+                pdf_text = ingest_pdf_bytes(body) or ""
+            except IngestionError as exc:
+                return None, str(exc)
+            if len(pdf_text.strip()) < settings.crawl_min_chars:
+                return None, "Could not extract text from this PDF."
+            return pdf_text, ""
         if body is not None and ctype in ("application/xml", "text/xml") and _SITEMAP_RE.search(body[:4096]):
             return None, "This is an XML sitemap, not a page. Add the pages it lists instead."
         if body is not None:

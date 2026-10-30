@@ -170,3 +170,6 @@ CI (`.github/workflows/ci.yml`) runs ruff and then pytest on Python 3.10, 3.11 a
 ## Contributing / License
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under the [MIT License](LICENSE).
+
+
+> **Testing status:** see [docs/TESTING.md](docs/TESTING.md). In the live run with a real Gemini key, the embeddings were real. Every generation call was rate-limited (HTTP 429), so the storyboard, flashcard and graph screenshots in `docs/e2e/` show the built-in text fallback, not model output.

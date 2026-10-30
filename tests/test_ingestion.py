@@ -332,3 +332,21 @@ def test_truncated_but_openable_pdf_reports_damage(monkeypatch):
     data = doc.tobytes()
     with pytest.raises(IngestionError, match="damaged"):
         ingestion.ingest_pdf_bytes(data[: len(data) * 2 // 3])
+
+
+def test_crawl_url_extracts_linked_pdf(monkeypatch):
+    monkeypatch.setattr(ingestion, "validate_public_url", lambda u: "")
+    monkeypatch.setattr(ingestion, "robots_allowed", lambda u: True)
+    monkeypatch.setattr(ingestion, "_fetch_static", lambda u: (b"%PDF-1.4 fake", "application/pdf", "utf-8", ""))
+    monkeypatch.setattr(ingestion, "ingest_pdf_bytes", lambda b: "Attention is all you need. " * 20)
+    text, reason = ingestion.crawl_url_detailed("https://example.com/paper.pdf", "never")
+    assert reason == "" and text.startswith("Attention")
+
+
+def test_crawl_url_pdf_without_text(monkeypatch):
+    monkeypatch.setattr(ingestion, "validate_public_url", lambda u: "")
+    monkeypatch.setattr(ingestion, "robots_allowed", lambda u: True)
+    monkeypatch.setattr(ingestion, "_fetch_static", lambda u: (b"%PDF-1.4", "application/pdf", "utf-8", ""))
+    monkeypatch.setattr(ingestion, "ingest_pdf_bytes", lambda b: None)
+    text, reason = ingestion.crawl_url_detailed("https://example.com/p.pdf", "never")
+    assert text is None and "PDF" in reason
