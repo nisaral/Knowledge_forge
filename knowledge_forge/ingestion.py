@@ -204,7 +204,7 @@ def _fetch_static(url: str) -> tuple[bytes | None, str, str, str]:
     settings = get_settings()
     headers = {
         "User-Agent": settings.crawl_user_agent,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.1",
         "Accept-Language": "en-US,en;q=0.9",
     }
     resp = None
@@ -561,6 +561,7 @@ def ingest_pdf_bytes(data: bytes) -> str | None:
             if doc.needs_pass:
                 raise IngestionError("This PDF is password protected. Remove the password and try again.")
             texts = [page.get_text("text") for page in doc]
+            repaired = bool(getattr(doc, "is_repaired", False))
     except IngestionError:
         raise
     except Exception as exc:
@@ -577,7 +578,7 @@ def ingest_pdf_bytes(data: bytes) -> str | None:
         if ocr and len(ocr.strip()) > len(raw):
             return ocr
         if not raw:
-            raise IngestionError(PDF_NO_TEXT_MESSAGE)
+            raise IngestionError(PDF_DAMAGED_MESSAGE if repaired else PDF_NO_TEXT_MESSAGE)
     return raw
 
 

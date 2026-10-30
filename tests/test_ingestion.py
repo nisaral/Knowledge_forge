@@ -308,3 +308,27 @@ def test_robots_txt_missing_or_unreachable_allows(monkeypatch):
 
     monkeypatch.setattr(ingestion, "_http_get", boom)
     assert ingestion.robots_allowed("https://b.example/x")
+
+
+def test_accept_header_has_wildcard_fallback(monkeypatch):
+    # sitemaps.org answered 406 to an Accept header without */* during the live run.
+    seen = {}
+
+    def fake_get(url, **kw):
+        seen.update(kw["headers"])
+        return _RobotsResp(404)
+
+    monkeypatch.setattr(ingestion, "_http_get", fake_get)
+    ingestion._fetch_static("https://example.com/")
+    assert "*/*" in seen["Accept"]
+
+
+def test_truncated_but_openable_pdf_reports_damage(monkeypatch):
+    import pymupdf
+
+    monkeypatch.setattr(ingestion, "ingest_pdf_via_gemini_bytes", lambda _d: None)
+    doc = pymupdf.open()
+    doc.new_page()  # no text, so extraction is empty
+    data = doc.tobytes()
+    with pytest.raises(IngestionError, match="damaged"):
+        ingestion.ingest_pdf_bytes(data[: len(data) * 2 // 3])
