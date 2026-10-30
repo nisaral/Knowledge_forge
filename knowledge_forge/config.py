@@ -48,6 +48,7 @@ def _str_env(name: str, default: str = "") -> str:
 
 _TRUE = ("1", "true", "yes", "on")
 _FALSE = ("0", "false", "no", "off")
+RENDER_JS_MODES = ("auto", "always", "never")
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -119,6 +120,14 @@ class Settings:
     crawl_min_chars: int = 50
     crawl_user_agent: str = "KnowledgeForge/2 (+https://github.com/nisaral/Knowledge_forge)"
     allow_private_urls: bool = False
+    # Headless-browser rendering for JavaScript pages (needs the optional "js" extra)
+    render_js: str = "never"  # auto | always | never
+    render_js_timeout_seconds: int = 20
+    render_js_max_concurrency: int = 2
+    render_js_max_requests: int = 150
+    render_js_settle_ms: int = 1500
+    render_js_min_chars: int = 500
+    render_js_browser_path: str = ""
     pdf_ocr_min_chars: int = 100
     youtube_languages: tuple[str, ...] = ("en", "en-US", "en-GB")
     youtube_metadata_fallback: bool = False
@@ -190,6 +199,10 @@ class Settings:
         log_format = _str_env("LOG_FORMAT", "text").lower()
         if log_format not in ("text", "json"):
             log_format = "text"
+        render_js = _str_env("RENDER_JS", "never").lower()
+        if render_js not in RENDER_JS_MODES:
+            logger.warning("Invalid RENDER_JS=%r; using 'never'", render_js)
+            render_js = "never"
         vector_store = _str_env("VECTOR_STORE", "local").lower()
         if vector_store not in ("local", "qdrant"):
             logger.warning("Unknown VECTOR_STORE=%r; falling back to 'local'.", vector_store)
@@ -243,6 +256,13 @@ class Settings:
                 "CRAWL_USER_AGENT", "KnowledgeForge/2 (+https://github.com/nisaral/Knowledge_forge)"
             ),
             allow_private_urls=_bool_env("ALLOW_PRIVATE_URLS", False),
+            render_js=render_js,
+            render_js_timeout_seconds=_int_env("RENDER_JS_TIMEOUT_SECONDS", 20, minimum=2),
+            render_js_max_concurrency=_int_env("RENDER_JS_MAX_CONCURRENCY", 2, minimum=1),
+            render_js_max_requests=_int_env("RENDER_JS_MAX_REQUESTS", 150, minimum=1),
+            render_js_settle_ms=_int_env("RENDER_JS_SETTLE_MS", 1500, minimum=0),
+            render_js_min_chars=_int_env("RENDER_JS_MIN_CHARS", 500, minimum=1),
+            render_js_browser_path=_str_env("RENDER_JS_BROWSER_PATH"),
             pdf_ocr_min_chars=_int_env("PDF_OCR_MIN_CHARS", 100, minimum=0),
             youtube_languages=_list_env("YOUTUBE_LANGUAGES", "en,en-US,en-GB"),
             youtube_metadata_fallback=_bool_env("YOUTUBE_METADATA_FALLBACK", False),

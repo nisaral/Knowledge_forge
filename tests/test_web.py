@@ -88,7 +88,7 @@ def test_add_text_then_list_and_delete(client):
 
 
 def test_add_web_failure_is_422(client, monkeypatch):
-    monkeypatch.setattr(web, "ingest_text_source", lambda s, t: (None, "blocked", "web"))
+    monkeypatch.setattr(web, "ingest_text_source", lambda s, t, *_a: (None, "blocked", "web"))
     r = client.post("/api/add-content", json={"source": "https://example.com", "source_type": "web"})
     assert r.status_code == 422 and r.get_json()["message"] == "blocked"
 

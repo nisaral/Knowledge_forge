@@ -48,7 +48,7 @@ def test_ingest_text_source_text_is_never_treated_as_url():
 
 def test_ingest_web_uses_crawler(monkeypatch):
     monkeypatch.setattr(ingestion, "validate_public_url", lambda _u: None)
-    monkeypatch.setattr(ingestion, "crawl_url_detailed", lambda u: (f"content of {u}", ""))
+    monkeypatch.setattr(ingestion, "crawl_url_detailed", lambda u, *_a: (f"content of {u}", ""))
     text, err, stype = ingestion.ingest_text_source("example.com", "web")
     assert text == "content of https://example.com" and stype == "web" and not err
 

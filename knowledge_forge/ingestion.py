@@ -168,6 +168,14 @@ def _http_get(url: str, **kwargs) -> requests.Response:
     return session.get(url, **kwargs)
 
 
+def _http_request(method: str, url: str, **kwargs) -> requests.Response:
+    """Any-method request through the same guarded per-thread session (used by the JS renderer)."""
+    session = getattr(_session_local, "session", None)
+    if session is None:
+        session = _session_local.session = _new_session()
+    return session.request(method, url, **kwargs)
+
+
 _HTML_TYPES = ("text/html", "application/xhtml+xml", "text/plain", "application/xml", "text/xml")
 
 
@@ -183,15 +191,17 @@ def _read_capped(resp, limit: int) -> bytes:
     return bytes(buf)
 
 
-def crawl_url_detailed(url: str) -> tuple[str | None, str]:
-    """Fetch ``url`` and extract readable text. Returns ``(text, error_reason)``."""
+def _html_to_text(body: bytes | str) -> str:
+    soup = BeautifulSoup(body, "html.parser")
+    for el in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "form", "svg", "template"]):
+        el.decompose()
+    main = soup.find("article") or soup.find("main") or soup.body
+    return " ".join((main or soup).stripped_strings)
+
+
+def _fetch_static(url: str) -> tuple[bytes | None, str, str, str]:
+    """Fetch ``url`` with redirect re-validation. Returns ``(body, ctype, encoding, error)``."""
     settings = get_settings()
-    url = normalize_url(url)
-    problem = validate_public_url(url)
-    if problem:
-        return None, problem
-    if is_youtube_url(url):
-        return None, "That is a YouTube link; add it as a YouTube source."
     headers = {
         "User-Agent": settings.crawl_user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8",
@@ -210,42 +220,99 @@ def crawl_url_detailed(url: str) -> tuple[str | None, str]:
             problem = validate_public_url(url)
             if problem:
                 logger.warning("Blocked redirect to a non-public URL")
-                return None, problem
+                return None, "", "", problem
         else:
-            return None, "The page redirected too many times."
+            return None, "", "", "The page redirected too many times."
         if resp.status_code >= 400:
-            return None, f"The site responded with HTTP {resp.status_code}."
+            return None, "", "", f"The site responded with HTTP {resp.status_code}."
         ctype = (resp.headers.get("content-type") or "text/html").split(";")[0].strip().lower()
         if ctype not in _HTML_TYPES:
-            return None, f"Unsupported content type '{ctype[:60]}'. Upload files with the File tab."
+            return None, ctype, "", f"Unsupported content type '{ctype[:60]}'. Upload files with the File tab."
         body = _read_capped(resp, settings.crawl_max_bytes)
+        return body, ctype, resp.encoding or "utf-8", ""
     except IngestionError as exc:
-        return None, str(exc)
+        return None, "", "", str(exc)
     except requests.exceptions.Timeout:
-        return None, "The site took too long to respond."
+        return None, "", "", "The site took too long to respond."
     except requests.exceptions.RequestException as exc:
         if _BLOCKED_MARKER in repr(exc):
-            return None, PRIVATE_URL_MESSAGE
+            return None, "", "", PRIVATE_URL_MESSAGE
         logger.warning("Error crawling URL: %s", type(exc).__name__)
-        return None, "Could not connect to the site."
+        return None, "", "", "Could not connect to the site."
     finally:
         if resp is not None:
             resp.close()
-    if ctype == "text/plain":
-        text = body.decode(resp.encoding or "utf-8", errors="replace")
-    else:
-        soup = BeautifulSoup(body, "html.parser")
-        for el in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "form", "svg"]):
-            el.decompose()
-        main = soup.find("article") or soup.find("main") or soup.body
-        text = " ".join((main or soup).stripped_strings)
+
+
+def resolve_render_mode(requested: str | None) -> str:
+    """Combine the server's RENDER_JS setting with a per-request override.
+
+    ``never`` on the server disables rendering entirely; otherwise a request may ask for
+    ``auto``, ``always`` or ``never``.
+    """
+    server = get_settings().render_js
+    req = (requested or "").strip().lower()
+    if not req:
+        return server
+    if req not in ("auto", "always", "never"):
+        raise IngestionError("render_js must be one of auto, always or never.")
+    if server == "never" and req != "never":
+        raise IngestionError("JavaScript rendering is disabled on this server (RENDER_JS=never).")
+    return req
+
+
+def crawl_url_detailed(url: str, render_js: str | None = None) -> tuple[str | None, str]:
+    """Fetch ``url`` and extract readable text. Returns ``(text, error_reason)``.
+
+    ``render_js`` is ``auto`` / ``always`` / ``never`` (default: the RENDER_JS setting).
+    """
+    from knowledge_forge import js_render
+
+    settings = get_settings()
+    url = normalize_url(url)
+    problem = validate_public_url(url)
+    if problem:
+        return None, problem
+    if is_youtube_url(url):
+        return None, "That is a YouTube link; add it as a YouTube source."
+    try:
+        mode = resolve_render_mode(render_js)
+    except IngestionError as exc:
+        return None, str(exc)
+
+    text, reason, html = "", "", b""
+    if mode != "always":
+        body, ctype, encoding, reason = _fetch_static(url)
+        if body is not None:
+            html = body
+            text = body.decode(encoding, errors="replace") if ctype == "text/plain" else _html_to_text(body)
+            if ctype == "text/plain":
+                mode = "never"
+        elif mode == "never" or reason == PRIVATE_URL_MESSAGE or reason.startswith("Unsupported content type"):
+            return None, reason
+
+    if mode == "always" or (mode == "auto" and (not text or js_render.looks_like_spa(html, text))):
+        try:
+            rendered, _final = js_render.render_page(url)
+            rendered_text = _html_to_text(rendered)
+            if len(rendered_text.strip()) >= len(text.strip()):
+                text = rendered_text
+        except IngestionError as exc:
+            if len(text.strip()) < settings.crawl_min_chars:
+                return None, str(exc)
+            logger.info("JavaScript rendering failed; using static HTML")
+
     if len(text.strip()) < settings.crawl_min_chars:
-        return None, "Could not extract readable text (the page may need JavaScript). Paste it as Text instead."
+        if reason:
+            return None, reason
+        hint = ("Turn on 'Render JavaScript' or paste it as Text instead." if js_render.status()["available"]
+                else "Paste it as Text instead.")
+        return None, f"Could not extract readable text (the page may need JavaScript). {hint}"
     return text, ""
 
 
-def crawl_url(url: str) -> str | None:
-    return crawl_url_detailed(url)[0]
+def crawl_url(url: str, render_js: str | None = None) -> str | None:
+    return crawl_url_detailed(url, render_js)[0]
 
 
 def _extract_youtube_id(video_url: str) -> str | None:
@@ -393,7 +460,7 @@ def get_youtube_transcript(video_url: str) -> tuple[str | None, str]:
 SOURCE_TYPES = ("web", "youtube", "text")
 
 
-def ingest_text_source(source: str, source_type: str) -> tuple[str | None, str, str]:
+def ingest_text_source(source: str, source_type: str, render_js: str | None = None) -> tuple[str | None, str, str]:
     """
     Ingest URL or raw text. Returns (text, error_detail, effective_source_type).
     Auto-detects YouTube URLs even when submitted as 'web'.
@@ -417,7 +484,7 @@ def ingest_text_source(source: str, source_type: str) -> tuple[str | None, str, 
         problem = validate_public_url(source)
         if problem:
             return None, problem, "web"
-        text, reason = crawl_url_detailed(source)
+        text, reason = crawl_url_detailed(source, render_js)
         if not text:
             return None, reason or "Could not extract readable text. Paste the content as Text instead.", "web"
         return text, "", "web"

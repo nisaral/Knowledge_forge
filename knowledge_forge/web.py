@@ -15,7 +15,7 @@ from collections import defaultdict, deque
 import numpy as np
 from flask import Flask, Response, g, jsonify, render_template, request, stream_with_context
 
-from knowledge_forge import __version__
+from knowledge_forge import __version__, js_render
 from knowledge_forge.cache import redis_health_check
 from knowledge_forge.chunking import chunk_text, content_hash, normalize_text
 from knowledge_forge.config import flask_secret, get_settings
@@ -398,6 +398,7 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
             "sources": k.list_sources(),
             "stats": k.stats(),
             "gemini_configured": get_settings().gemini_configured,
+            "render_js": js_render.status(),
         })
 
     @app.route("/api/delete-source", methods=["POST"])
@@ -424,8 +425,9 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
         stype = (_opt_str(data, "source_type") or "").lower()
         if stype not in SOURCE_TYPES:
             raise ValidationError(f"Unknown source type '{stype}'. Use one of: {', '.join(SOURCE_TYPES)}.")
+        render_js = _opt_str(data, "render_js", 10)
         ensure_gemini_configured()
-        text, detail, effective_type = ingest_text_source(source, stype)
+        text, detail, effective_type = ingest_text_source(source, stype, render_js)
         if not text:
             raise IngestionError(detail or f"Failed to extract content from {effective_type}.")
         label = source
