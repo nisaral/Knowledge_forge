@@ -1,460 +1,604 @@
-/* KnowledgeForge V2 — app.js */
-mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
+/* KnowledgeForge front end — vanilla JS, no build step. */
+(() => {
+  "use strict";
 
-const API = '/api';
-let chatSrc = '';
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const HISTORY_KEY = "kf-chat-v1";
+  const MAX_STORED_MESSAGES = 60;
 
-// ── Utilities ──────────────────────────────────────────────────────────────
-const $ = id => document.getElementById(id);
-const toast = (msg, isErr = false) => {
-  const el = $('toast');
-  el.innerHTML = `<i class="fas fa-${isErr ? 'exclamation-circle' : 'check-circle'}"></i> ${msg}`;
-  el.className = `toast show ${isErr ? 'error' : 'success'}`;
-  setTimeout(() => el.classList.remove('show'), 3500);
-};
-const loader = (show, text = 'Processing...') => {
-  $('overlay').classList.toggle('active', show);
-  $('overlay-text').textContent = text;
-};
+  const state = {
+    sources: [],
+    scope: null,            // selected source name or null for all
+    history: loadHistory(), // [{role, content, sources?}]
+    busy: false,
+    file: null,
+  };
 
-async function api(endpoint, opts = {}) {
-  const r = await fetch(`${API}/${endpoint}`, opts);
-  let data;
-  try {
-    data = await r.json();
-  } catch {
-    throw new Error(`Server returned ${r.status}`);
-  }
-  if (!r.ok && !data.message) {
-    data.message = `Request failed (${r.status})`;
-    data.success = false;
-  }
-  return data;
-}
-
-// ── Sources ────────────────────────────────────────────────────────────────
-const TYPE_ICONS = { web:'fa-globe', youtube:'fa-youtube fab', pdf:'fa-file-pdf',
-  audio:'fa-microphone-alt', video:'fa-video', image:'fa-image', text:'fa-file-alt' };
-const TYPE_CLS   = { web:'chip-web', youtube:'chip-youtube', pdf:'chip-pdf',
-  audio:'chip-audio', video:'chip-video', image:'chip-image', text:'chip-text' };
-
-async function refreshSources() {
-  const data = await api('get-sources');
-  if (!data.success) return;
-  const chips = $('source-chips');
-  const filters = document.querySelectorAll('.src-filter');
-
-  // Save current selections
-  const saved = {};
-  filters.forEach(s => { saved[s.id] = s.value; });
-
-  if (!data.sources || data.sources.length === 0) {
-    chips.innerHTML = '<div style="font-size:12px;color:var(--muted);text-align:center;padding:10px 0">No sources added yet</div>';
-    filters.forEach(s => { s.innerHTML = '<option value="">All Sources</option>'; });
-    return;
+  /* ─── Utilities ───────────────────────────────────────────────────────── */
+  function escapeHtml(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+    })[c]);
   }
 
-  chips.innerHTML = data.sources.map(s => `
-    <div class="source-chip">
-      <div class="chip-icon ${TYPE_CLS[s.type] || 'chip-text'}">
-        <i class="fas ${TYPE_ICONS[s.type] || 'fa-file'}"></i>
-      </div>
-      <span class="chip-label" title="${s.source}">${s.source.length > 42 ? s.source.substring(0,39)+'...' : s.source}</span>
-    </div>`).join('');
+  function el(tag, attrs = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") node.className = v;
+      else if (k === "html") node.innerHTML = v; // only ever used with sanitized markup
+      else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+      else node.setAttribute(k, v === true ? "" : v);
+    }
+    for (const c of children.flat()) {
+      if (c == null) continue;
+      node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    }
+    return node;
+  }
 
-  const opts = '<option value="">All Sources</option>' +
-    data.sources.map(s => `<option value="${s.source}">${s.source.length>40?s.source.substring(0,37)+'...':s.source}</option>`).join('');
-  filters.forEach(s => { s.innerHTML = opts; s.value = saved[s.id] || ''; });
-}
+  const icon = (name) => {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+    use.setAttribute("href", `#i-${name}`);
+    svg.append(use);
+    return svg;
+  };
 
-// ── Tab Switcher ─────────────────────────────────────────────────────────
-function setupTabs(barId, panelPrefix, onChange) {
-  const bar = $(barId);
-  if (!bar) return;
-  bar.addEventListener('click', e => {
-    const tab = e.target.closest('.tab, .tool-tab');
-    if (!tab) return;
-    bar.querySelectorAll('.tab, .tool-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    const key = tab.dataset.tab || tab.dataset.tool;
-    document.querySelectorAll(`[id^="${panelPrefix}"]`).forEach(p => {
-      p.classList.toggle('active', p.id === `${panelPrefix}${key}`);
+  /** Minimal, safe Markdown: HTML is escaped first, then a small subset is rendered. */
+  function renderMarkdown(src, { citations = false } = {}) {
+    const text = String(src ?? "").replace(/\r\n?/g, "\n");
+    const blocks = [];
+    const codeStore = [];
+    let body = text.replace(/```[^\n]*\n([\s\S]*?)```/g, (_, code) => {
+      codeStore.push(`<pre><code>${escapeHtml(code.replace(/\n$/, ""))}</code></pre>`);
+      return `\u0000${codeStore.length - 1}\u0000`;
     });
-    if (onChange) onChange(key);
-  });
-}
+    body = escapeHtml(body);
 
-// ── Text/URL Content ──────────────────────────────────────────────────────
-function isYouTubeUrl(val) {
-  return /(?:youtube\.com|youtu\.be)/i.test(val);
-}
-
-function setupTextBtns() {
-  document.querySelectorAll('.add-text-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      let type = btn.dataset.type;
-      const inputId = type === 'text' ? 'custom-text' : (type === 'youtube' ? 'yt-url' : 'web-url');
-      const val = $(inputId).value.trim();
-      if (!val) return toast('Please enter a value.', true);
-      if (type === 'web' && isYouTubeUrl(val)) {
-        type = 'youtube';
-        toast('YouTube link detected — fetching transcript…');
+    const inline = (s) => {
+      let out = s
+        .replace(/`([^`]+)`/g, "<code>$1</code>")
+        .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+        .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+          '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+      if (citations) {
+        out = out.replace(/\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g, (_, nums) =>
+          nums.split(/\s*,\s*/).map((n) => `<button type="button" class="cite" data-cite="${n}">${n}</button>`).join(""));
       }
-      loader(true, `Ingesting ${type} content…`);
-      try {
-        const d = await api('add-content', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify({ source: val, source_type: type })
-        });
-        toast(d.message || (d.success ? 'Content added.' : 'Failed to add content.'), !d.success);
-        if (d.success) { $(inputId).value = ''; refreshSources(); }
-      } catch (e) { toast(e.message || 'Network error.', true); }
-      finally { loader(false); }
-    });
-  });
-}
+      return out;
+    };
 
-// ── File Uploads ──────────────────────────────────────────────────────────
-function setupDropZone(dropId, inputId, progressId, fillId, label) {
-  const zone  = $(dropId);
-  const input = $(inputId);
-  const prog  = $(progressId);
-  const fill  = $(fillId);
-  if (!zone) return;
+    const lines = body.split("\n");
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const code = line.match(/^\u0000(\d+)\u0000$/);
+      if (code) { blocks.push(codeStore[+code[1]]); i++; continue; }
+      if (!line.trim()) { i++; continue; }
+      const h = line.match(/^(#{1,4})\s+(.*)$/);
+      if (h) { blocks.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+      if (/^\s*([-*_])\s*\1\s*\1[\s\1]*$/.test(line)) { blocks.push("<hr>"); i++; continue; }
+      if (/^&gt;\s?/.test(line)) {
+        const q = [];
+        while (i < lines.length && /^&gt;\s?/.test(lines[i])) q.push(lines[i++].replace(/^&gt;\s?/, ""));
+        blocks.push(`<blockquote>${inline(q.join("<br>"))}</blockquote>`);
+        continue;
+      }
+      if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])) {
+        const row = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim()));
+        const head = row(line);
+        i += 2;
+        const rows = [];
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(row(lines[i++]));
+        blocks.push(`<table><thead><tr>${head.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>${
+          rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+        continue;
+      }
+      const listRe = /^\s*(?:([-*+])|(\d+)[.)])\s+(.*)$/;
+      if (listRe.test(line)) {
+        const ordered = !!line.match(listRe)[2];
+        const items = [];
+        while (i < lines.length && listRe.test(lines[i])) {
+          items.push(`<li>${inline(lines[i].match(listRe)[3])}</li>`);
+          i++;
+          while (i < lines.length && /^\s{2,}\S/.test(lines[i]) && !listRe.test(lines[i])) {
+            items[items.length - 1] = items[items.length - 1].replace(/<\/li>$/, ` ${inline(lines[i].trim())}</li>`);
+            i++;
+          }
+        }
+        blocks.push(ordered ? `<ol>${items.join("")}</ol>` : `<ul>${items.join("")}</ul>`);
+        continue;
+      }
+      const para = [];
+      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|\s*[-*+]\s|\s*\d+[.)]\s|&gt;|\u0000)/.test(lines[i])) {
+        para.push(lines[i++]);
+      }
+      if (!para.length) para.push(lines[i++]);
+      blocks.push(`<p>${inline(para.join("<br>"))}</p>`);
+    }
+    return blocks.join("");
+  }
 
-  zone.addEventListener('click', () => input.click());
-  zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-  zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
-  zone.addEventListener('drop', e => { e.preventDefault(); zone.classList.remove('drag-over'); uploadFile(e.dataTransfer.files[0]); });
-  input.addEventListener('change', () => { if (input.files[0]) uploadFile(input.files[0]); });
+  /* ─── Toasts ──────────────────────────────────────────────────────────── */
+  function toast(message, type = "info", ms = 4200) {
+    const t = el("div", { class: `toast ${type}`, role: type === "error" ? "alert" : "status" },
+      el("span", { class: "msg-text" }, message),
+      el("button", { class: "icon-btn tiny", "aria-label": "Dismiss", onclick: () => dismiss() }, icon("x")));
+    $("#toasts").append(t);
+    let timer = setTimeout(dismiss, ms);
+    function dismiss() {
+      clearTimeout(timer);
+      t.classList.add("out");
+      setTimeout(() => t.remove(), 250);
+    }
+  }
 
-  async function uploadFile(file) {
-    if (!file) return;
-    prog.style.display = 'block';
-    fill.style.width = '10%';
-
-    const fd = new FormData();
-    fd.append('file', file);
-
-    // Fake progress while waiting
-    let pct = 10;
-    const tick = setInterval(() => { pct = Math.min(pct + 8, 85); fill.style.width = pct + '%'; }, 600);
-
-    loader(true, `Processing ${label}… (${file.name})`);
+  /* ─── API ─────────────────────────────────────────────────────────────── */
+  async function api(path, { method = "GET", body, form } = {}) {
+    const opts = { method, headers: {} };
+    if (form) opts.body = form;
+    else if (body !== undefined) {
+      opts.headers["Content-Type"] = "application/json";
+      opts.body = JSON.stringify(body);
+    }
+    let res;
     try {
-      const r = await fetch(`${API}/upload-file`, { method: 'POST', body: fd });
-      let d;
-      try { d = await r.json(); } catch { throw new Error(`Upload failed (${r.status})`); }
-      if (!r.ok && !d.message) { d.message = `Upload failed (${r.status})`; d.success = false; }
-      clearInterval(tick);
-      fill.style.width = '100%';
-      toast(d.message, !d.success);
-      if (d.success) { input.value = ''; refreshSources(); }
-    } catch (e) { toast(e.message || 'Upload failed.', true); }
-    finally {
-      loader(false);
-      setTimeout(() => { prog.style.display = 'none'; fill.style.width = '0%'; }, 1000);
+      res = await fetch(path, opts);
+    } catch {
+      throw new Error("Can't reach the server. Is it running?");
+    }
+    let data = null;
+    try { data = await res.json(); } catch { /* non-JSON error page */ }
+    if (!res.ok || (data && data.success === false)) {
+      throw new Error((data && data.message) || `Request failed (${res.status}).`);
+    }
+    return data || {};
+  }
+
+  function setLoading(btn, on) {
+    if (!btn) return;
+    btn.classList.toggle("loading", on);
+    btn.disabled = on;
+  }
+
+  /* ─── Theme ───────────────────────────────────────────────────────────── */
+  $("#theme-toggle").addEventListener("click", () => {
+    const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
+    document.documentElement.setAttribute("data-theme", next);
+    localStorage.setItem("kf-theme", next);
+  });
+
+  /* ─── Sidebar (mobile drawer) ─────────────────────────────────────────── */
+  const sidebar = $("#sidebar");
+  const scrim = $("#scrim");
+  const openSidebar = () => { sidebar.classList.add("open"); scrim.hidden = false; };
+  const closeSidebar = () => { sidebar.classList.remove("open"); scrim.hidden = true; };
+  $("#open-sidebar").addEventListener("click", openSidebar);
+  $("#close-sidebar").addEventListener("click", closeSidebar);
+  scrim.addEventListener("click", closeSidebar);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeSidebar(); });
+
+  /* ─── Views ───────────────────────────────────────────────────────────── */
+  function showView(name) {
+    $$(".tab").forEach((t) => {
+      const on = t.dataset.view === name;
+      t.classList.toggle("active", on);
+      t.setAttribute("aria-selected", on);
+    });
+    $$("[data-view-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.viewPane !== name));
+    if (name === "chat") $("#chat-input").focus();
+  }
+  $$(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
+
+  /* ─── Add-source forms ────────────────────────────────────────────────── */
+  $$(".seg").forEach((b) => b.addEventListener("click", () => {
+    $$(".seg").forEach((x) => { x.classList.toggle("active", x === b); x.setAttribute("aria-selected", x === b); });
+    $$(".add-form").forEach((f) => f.classList.toggle("hidden", f.dataset.pane !== b.dataset.add));
+  }));
+
+  const isYouTube = (url) => /^(https?:\/\/)?((www|m|music)\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)\//i.test(url);
+
+  async function addSource(payload, btn) {
+    setLoading(btn, true);
+    try {
+      const data = await api("/api/add-content", { method: "POST", body: payload });
+      toast(data.message, data.chunks_added ? "success" : "info");
+      await refreshSources();
+      return true;
+    } catch (err) {
+      toast(err.message, "error", 7000);
+      return false;
+    } finally {
+      setLoading(btn, false);
     }
   }
-}
 
-// ── Results ───────────────────────────────────────────────────────────────
-function addCard(title, icon, bodyFn) {
-  const card = document.createElement('div');
-  card.className = 'result-card';
-  card.innerHTML = `
-    <div class="result-card-header">
-      <div class="result-card-title"><i class="fas ${icon}"></i> ${title}</div>
-      <div class="result-card-actions">
-        <button class="icon-btn copy-btn" title="Copy"><i class="fas fa-copy"></i></button>
-        <button class="icon-btn dl-btn" title="Download"><i class="fas fa-download"></i></button>
-      </div>
-    </div>
-    <div class="result-card-body"></div>`;
-  bodyFn(card.querySelector('.result-card-body'));
-
-  // Copy plain text
-  card.querySelector('.copy-btn').addEventListener('click', () => {
-    const txt = card.querySelector('.result-card-body').innerText;
-    navigator.clipboard.writeText(txt).then(() => toast('Copied!'));
-  });
-  // Download markdown
-  card.querySelector('.dl-btn').addEventListener('click', () => {
-    const txt = card.querySelector('.result-card-body').innerText;
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob([txt], {type:'text/markdown'}));
-    a.download = title.replace(/\s+/g,'_') + '.md';
-    a.click();
+  $("#form-link").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = $("#link-input");
+    const url = input.value.trim();
+    if (!url) return;
+    const ok = await addSource({ source: url, source_type: isYouTube(url) ? "youtube" : "web" }, e.submitter || $("#form-link button"));
+    if (ok) input.value = "";
   });
 
-  $('results').prepend(card);
-  return card;
-}
-
-function renderMarkdown(text) {
-  // Very lightweight markdown renderer
-  return text
-    .replace(/^### (.+)$/gm,'<h3>$1</h3>')
-    .replace(/^## (.+)$/gm,'<h2>$1</h2>')
-    .replace(/^# (.+)$/gm,'<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g,'<em>$1</em>')
-    .replace(/`(.+?)`/g,'<code>$1</code>')
-    .replace(/\n- (.+)/g,'\n<li>$1</li>')
-    .replace(/\n/g,'<br>');
-}
-
-function textCard(title, icon, content) {
-  addCard(title, icon, body => {
-    body.innerHTML = `<div class="md-content">${renderMarkdown(content)}</div>`;
+  $("#form-text").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = $("#text-input").value.trim();
+    if (text.length < 20) { toast("Please paste at least a couple of sentences.", "error"); return; }
+    const ok = await addSource({ source: text, source_type: "text", title: $("#text-title").value.trim() || null },
+      e.submitter || $("#form-text button"));
+    if (ok) { $("#text-input").value = ""; $("#text-title").value = ""; }
   });
-}
 
-async function mermaidCard(title, icon, code) {
-  addCard(title, icon, body => {
-    const wrap = document.createElement('div');
-    wrap.className = 'mermaid-wrap';
-    body.appendChild(wrap);
-    (async () => {
-      try {
-        const { svg } = await mermaid.render(`mg-${Date.now()}`, code);
-        wrap.innerHTML = svg;
-      } catch {
-        wrap.innerHTML = `<p style="color:var(--error);font-size:13px">Diagram render failed.</p><pre style="font-size:11px;overflow:auto">${code}</pre>`;
-      }
-    })();
-  });
-}
+  const dropzone = $("#dropzone");
+  const fileInput = $("#file-input");
+  function pickFile(file) {
+    state.file = file || null;
+    $("#dz-sub").textContent = file ? `${file.name} · ${(file.size / 1048576).toFixed(1)} MB` : $("#dz-sub").dataset.default;
+    $("#upload-btn").disabled = !file;
+  }
+  $("#dz-sub").dataset.default = $("#dz-sub").textContent;
+  fileInput.addEventListener("change", () => pickFile(fileInput.files[0]));
+  dropzone.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } });
+  ["dragenter", "dragover"].forEach((ev) => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("drag"); }));
+  ["dragleave", "drop"].forEach((ev) => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("drag"); }));
+  dropzone.addEventListener("drop", (e) => pickFile(e.dataTransfer.files[0]));
 
-function flashcardsCard(title, cards) {
-  addCard(title, 'fa-clone', body => {
-    const grid = document.createElement('div');
-    grid.className = 'flashcard-grid';
-    cards.forEach(fc => {
-      const card = document.createElement('div');
-      card.className = 'flashcard';
-      card.innerHTML = `
-        <div class="flashcard-inner">
-          <div class="flashcard-front">${fc.question}<span class="fc-hint">Click to reveal</span></div>
-          <div class="flashcard-back">${fc.answer}</div>
-        </div>`;
-      card.addEventListener('click', () => card.classList.toggle('flipped'));
-      grid.appendChild(card);
-    });
-    body.appendChild(grid);
-  });
-}
-
-function storyboardCard(title, panels) {
-  addCard(title, 'fa-film', body => {
-    const grid = document.createElement('div');
-    grid.className = 'storyboard-grid';
-    panels.forEach((p, i) => {
-      const div = document.createElement('div');
-      div.className = 'storyboard-panel';
-      div.innerHTML = `<div class="panel-num">Panel ${i+1}</div><i class="${p.icon||'fas fa-image'}"></i><p>${p.scene}</p>`;
-      grid.appendChild(div);
-    });
-    body.appendChild(grid);
-  });
-}
-
-function entitiesCard(entities) {
-  addCard('Extracted Entities', 'fa-tags', body => {
-    let hasAny = false;
-    for (const [cat, list] of Object.entries(entities)) {
-      if (list && list.length > 0) {
-        hasAny = true;
-        const g = document.createElement('div');
-        g.className = 'entity-group';
-        g.innerHTML = `<h4>${cat}</h4>` + list.map(e => `<span class="entity-pill">${e}</span>`).join('');
-        body.appendChild(g);
-      }
+  $("#form-file").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!state.file) return;
+    const btn = $("#upload-btn");
+    const form = new FormData();
+    form.append("file", state.file);
+    setLoading(btn, true);
+    toast(`Processing ${state.file.name}… media files can take a minute.`, "info");
+    try {
+      const data = await api("/api/upload-file", { method: "POST", form });
+      toast(data.message, data.chunks_added ? "success" : "info");
+      fileInput.value = "";
+      pickFile(null);
+      await refreshSources();
+    } catch (err) {
+      toast(err.message, "error", 7000);
+    } finally {
+      setLoading(btn, false);
+      btn.disabled = !state.file;
     }
-    if (!hasAny) body.innerHTML = '<p style="font-size:13px;color:var(--muted)">No entities found.</p>';
-  });
-}
-
-// ── Tool Actions ─────────────────────────────────────────────────────────
-async function runQnA() {
-  const q = $('qna-q').value.trim();
-  const src = $('qna-src').value;
-  if (!q) return toast('Enter a question.', true);
-  loader(true, 'Searching knowledge base…');
-  try {
-    const d = await api('ask-question', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({question:q, source:src||null})
-    });
-    if (d.success) textCard(`Q: ${q}`, 'fa-question-circle', d.answer);
-    else toast(d.message || 'Failed to get answer.', true);
-  } catch { toast('Error.', true); }
-  finally { loader(false); }
-}
-
-async function runSummarize() {
-  const src = $('sum-src').value;
-  loader(true, 'Generating summary…');
-  try {
-    const d = await api('summarize', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({source:src||null})
-    });
-    if (d.success) textCard(d.title, 'fa-align-left', d.content);
-    else toast(d.message, true);
-  } catch { toast('Error.', true); }
-  finally { loader(false); }
-}
-
-async function runTool(tool) {
-  const topicEl = $(`${tool}-topic`);
-  const srcEl = $(`${tool}-src`);
-  const topic = topicEl ? topicEl.value.trim() : '';
-  const src = srcEl ? srcEl.value : '';
-  if (topicEl && !topic) return toast('Enter a topic.', true);
-
-  const loaderMsgs = {flashcards:'Generating flashcards…', study_plan:'Building study plan…',
-    mock_test:'Creating mock test…', mindmap:'Creating mind map…',
-    flowchart:'Creating flowchart…', storyboard:'Creating storyboard…'};
-  loader(true, loaderMsgs[tool] || 'Processing…');
-  try {
-    const d = await api('generate-tool-content', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({tool, topic, source:src||null})
-    });
-    if (!d.success) { toast(d.message || 'Tool generation failed.', true); return; }
-
-    if (tool === 'flashcards') flashcardsCard(d.title, d.content);
-    else if (tool === 'storyboard') storyboardCard(d.title, d.content);
-    else if (tool === 'mindmap' || tool === 'flowchart') mermaidCard(d.title, 'fa-project-diagram', d.mermaid_code);
-    else textCard(d.title, tool==='study_plan'?'fa-calendar-check':'fa-clipboard-list', d.content);
-  } catch { toast('Error.', true); }
-  finally { loader(false); }
-}
-
-async function runEntities() {
-  const src = $('entities-src').value;
-  loader(true, 'Extracting entities…');
-  try {
-    const d = await api('extract-entities', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({source:src||null})
-    });
-    if (d.success) entitiesCard(d.entities);
-    else toast(d.message, true);
-  } catch { toast('Error.', true); }
-  finally { loader(false); }
-}
-
-async function runTopics() {
-  loader(true, 'Clustering topics…');
-  try {
-    const d = await api('cluster-topics');
-    if (d.success) {
-      addCard('Topic Cluster Visualization', 'fa-chart-pie', body => {
-        body.innerHTML = `<img class="plot-img" src="${d.image}" alt="Topic clusters">`;
-      });
-    } else toast(d.message, true);
-  } catch { toast('Error.', true); }
-  finally { loader(false); }
-}
-
-// ── Chat ──────────────────────────────────────────────────────────────────
-function appendChatMsg(role, text) {
-  const msgs = $('chat-messages');
-  const div = document.createElement('div');
-  div.className = `chat-msg ${role}`;
-  div.innerHTML = renderMarkdown(text);
-  msgs.appendChild(div);
-  msgs.scrollTop = msgs.scrollHeight;
-}
-
-async function sendChat() {
-  const input = $('chat-input');
-  const msg = input.value.trim();
-  if (!msg) return;
-  const src = $('chat-src').value;
-  input.value = '';
-  appendChatMsg('user', msg);
-  loader(true, 'Thinking…');
-  try {
-    const d = await api('chat', {
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({message:msg, source:src||null})
-    });
-    if (d.success) appendChatMsg('assistant', d.answer);
-    else toast(d.message, true);
-  } catch { toast('Network error.', true); }
-  finally { loader(false); }
-}
-
-// ── Wire Up ───────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
-
-  // Source tabs
-  setupTabs('src-tabs', '', key => {
-    document.querySelectorAll('[id$="-panel"]').forEach(p => {
-      p.classList.toggle('active', p.id === `${key}-panel`);
-    });
   });
 
-  // Tool tabs — show/hide chat UI + tool panels
-  setupTabs('tool-tabs', 'tp-', key => {
-    const isChatTab = key === 'chat';
-    $('chat-ui').style.display = isChatTab ? 'block' : 'none';
+  /* ─── Sources ─────────────────────────────────────────────────────────── */
+  const TYPE_ICON = { web: "globe", youtube: "play", text: "text", pdf: "file", audio: "file", video: "play", image: "file" };
+
+  function displayName(src) {
+    try {
+      if (/^https?:\/\//.test(src)) {
+        const u = new URL(src);
+        const host = u.hostname.replace(/^www\./, "");
+        if (/youtube\.com$/.test(host) && u.searchParams.get("v")) return `YouTube · ${u.searchParams.get("v")}`;
+        return host + (u.pathname !== "/" ? u.pathname : "");
+      }
+    } catch { /* fall through */ }
+    return src;
+  }
+
+  function renderSources() {
+    const list = $("#source-list");
+    list.replaceChildren();
+    for (const s of state.sources) {
+      const selected = state.scope === s.source;
+      const li = el("li", {
+        class: `source${selected ? " selected" : ""}`, tabindex: "0", role: "button",
+        "aria-pressed": selected, title: s.source,
+        onclick: () => setScope(selected ? null : s.source),
+        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setScope(selected ? null : s.source); } },
+      },
+      el("span", { class: "source-icon" }, icon(TYPE_ICON[s.type] || "file")),
+      el("span", { class: "source-meta" },
+        el("div", { class: "source-name" }, displayName(s.source)),
+        el("div", { class: "source-sub" }, `${s.type} · ${s.chunks} chunk${s.chunks === 1 ? "" : "s"}`)),
+      el("button", {
+        class: "icon-btn danger", "aria-label": `Remove ${s.source}`, title: "Remove source",
+        onclick: (e) => { e.stopPropagation(); deleteSource(s.source); },
+      }, icon("trash")));
+      list.append(li);
+    }
+    const n = state.sources.length;
+    $("#source-count").textContent = n;
+    $("#sources-empty").hidden = n > 0;
+    $("#sources-empty").style.display = n ? "none" : "";
+    $("#clear-all").hidden = n === 0;
+    const scopeText = state.scope ? displayName(state.scope) : null;
+    $("#scope-hint").innerHTML = scopeText
+      ? `Focused on <strong>${escapeHtml(scopeText)}</strong>. Click it again to use all sources.`
+      : "Answers use <strong>all sources</strong>. Select one to focus.";
+    $("#scope-pill").hidden = !scopeText;
+    $("#scope-pill-text").textContent = scopeText ? `Scope: ${scopeText}` : "";
+  }
+
+  function setScope(source) {
+    state.scope = source;
+    renderSources();
+  }
+  $("#scope-clear").addEventListener("click", () => setScope(null));
+
+  async function refreshSources() {
+    try {
+      const data = await api("/api/get-sources");
+      state.sources = data.sources || [];
+      if (state.scope && !state.sources.some((s) => s.source === state.scope)) state.scope = null;
+      const chunks = data.stats?.chunks ?? state.sources.reduce((a, s) => a + s.chunks, 0);
+      $("#kb-stats").textContent = `${chunks} chunk${chunks === 1 ? "" : "s"} · ${data.stats?.backend || "local"} store`;
+      $("#key-banner").hidden = data.gemini_configured !== false;
+      renderSources();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  async function deleteSource(source) {
+    if (!confirm(`Remove "${displayName(source)}" from your knowledge base?`)) return;
+    try {
+      const data = await api("/api/delete-source", { method: "POST", body: { source } });
+      toast(data.message, "success");
+      await refreshSources();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  $("#clear-all").addEventListener("click", async () => {
+    if (!confirm("Remove every source and its embeddings? This cannot be undone.")) return;
+    try {
+      await api("/api/clear-data", { method: "POST" });
+      toast("Knowledge base cleared.", "success");
+      await refreshSources();
+    } catch (err) {
+      toast(err.message, "error");
+    }
   });
 
-  // Text add buttons
-  setupTextBtns();
+  /* ─── Chat ────────────────────────────────────────────────────────────── */
+  function loadHistory() {
+    try {
+      const h = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+      return Array.isArray(h) ? h.filter((m) => m && typeof m.content === "string") : [];
+    } catch { return []; }
+  }
+  function saveHistory() {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history.slice(-MAX_STORED_MESSAGES)));
+    } catch { /* storage full or disabled */ }
+  }
 
-  // File drop zones
-  setupDropZone('pdf-drop',   'pdf-input',   'pdf-progress',   'pdf-fill',   'PDF');
-  setupDropZone('audio-drop', 'audio-input', 'audio-progress', 'audio-fill', 'Audio');
-  setupDropZone('image-drop', 'image-input', 'image-progress', 'image-fill', 'Image');
-  setupDropZone('video-drop', 'video-input', 'video-progress', 'video-fill', 'Video');
+  function citationsBlock(sources) {
+    if (!sources || !sources.length) return null;
+    const details = el("details", { class: "citations" },
+      el("summary", {}, `${sources.length} source passage${sources.length === 1 ? "" : "s"}`));
+    for (const s of sources) {
+      details.append(el("div", { class: "cite-item", "data-n": s.n },
+        el("span", { class: "cite-n" }, `[${s.n}]`),
+        el("div", {},
+          el("div", { class: "cite-src" }, displayName(s.source)),
+          el("div", { class: "cite-snip" }, `${s.snippet}${s.snippet.length >= 320 ? "…" : ""}`))));
+    }
+    return details;
+  }
 
-  // Tool buttons (data-action)
-  document.querySelectorAll('[data-action]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const action = btn.dataset.action;
-      if (action === 'qna')       runQnA();
-      else if (action === 'summarize') runSummarize();
-      else if (action === 'entities')  runEntities();
-      else if (action === 'topics')    runTopics();
-      else if (action === 'tool')  runTool(btn.dataset.tool);
+  function messageNode(m) {
+    if (m.role === "user") {
+      return el("div", { class: "msg user" }, el("div", { class: "bubble" }, el("div", { class: "md", html: renderMarkdown(m.content) })));
+    }
+    const bubble = el("div", { class: "bubble" },
+      el("div", { class: "md", html: renderMarkdown(m.content, { citations: !!(m.sources && m.sources.length) }) }));
+    const cites = citationsBlock(m.sources);
+    if (cites) bubble.append(cites);
+    if (!m.error) {
+      bubble.append(el("div", { class: "bubble-actions" },
+        el("button", {
+          class: "icon-btn", title: "Copy answer", "aria-label": "Copy answer",
+          onclick: () => navigator.clipboard?.writeText(m.content).then(() => toast("Copied to clipboard.", "success", 1800)),
+        }, icon("copy"))));
+    }
+    bubble.addEventListener("click", (e) => {
+      const btn = e.target.closest(".cite");
+      if (!btn || !cites) return;
+      cites.open = true;
+      const item = cites.querySelector(`.cite-item[data-n="${btn.dataset.cite}"]`);
+      if (item) { item.classList.remove("flash"); void item.offsetWidth; item.classList.add("flash"); item.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
     });
+    return el("div", { class: `msg bot${m.error ? " error" : ""}` }, el("div", { class: "avatar", "aria-hidden": "true" }, "KF"), bubble);
+  }
+
+  function renderChat() {
+    const log = $("#chat-log");
+    log.replaceChildren(...state.history.map(messageNode));
+    $("#chat-empty").classList.toggle("hidden", state.history.length > 0);
+    scrollChat();
+  }
+  const scrollChat = () => { const s = $("#chat-scroll"); s.scrollTop = s.scrollHeight; };
+
+  async function sendMessage(text) {
+    if (state.busy || !text.trim()) return;
+    state.busy = true;
+    const history = state.history.filter((m) => !m.error).map(({ role, content }) => ({ role, content }));
+    state.history.push({ role: "user", content: text.trim() });
+    saveHistory();
+    renderChat();
+    const typing = el("div", { class: "msg bot" }, el("div", { class: "avatar" }, "KF"),
+      el("div", { class: "bubble" }, el("span", { class: "typing", "aria-label": "Thinking" }, el("i"), el("i"), el("i"))));
+    $("#chat-log").append(typing);
+    scrollChat();
+    $("#chat-send").disabled = true;
+    try {
+      const data = await api("/api/chat", { method: "POST", body: { message: text.trim(), history, source: state.scope } });
+      state.history.push({ role: "assistant", content: data.answer, sources: data.sources || [] });
+    } catch (err) {
+      state.history.push({ role: "assistant", content: err.message, error: true });
+    } finally {
+      state.busy = false;
+      $("#chat-send").disabled = false;
+      saveHistory();
+      renderChat();
+    }
+  }
+
+  const chatInput = $("#chat-input");
+  const autoGrow = () => { chatInput.style.height = "auto"; chatInput.style.height = `${Math.min(chatInput.scrollHeight, 200)}px`; };
+  chatInput.addEventListener("input", autoGrow);
+  chatInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#chat-form").requestSubmit(); }
+  });
+  $("#chat-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const text = chatInput.value;
+    if (!text.trim()) return;
+    chatInput.value = "";
+    autoGrow();
+    sendMessage(text);
+  });
+  $$("#suggestions .chip").forEach((c) => c.addEventListener("click", () => sendMessage(c.dataset.prompt)));
+  $("#chat-clear").addEventListener("click", () => {
+    if (!state.history.length) return;
+    state.history = [];
+    saveHistory();
+    renderChat();
+    api("/api/chat/clear", { method: "POST" }).catch(() => {});
+    toast("Conversation cleared.", "info", 1800);
   });
 
-  // Chat
-  $('chat-send').addEventListener('click', sendChat);
-  $('chat-input').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) sendChat(); });
-  $('clearChatBtn').addEventListener('click', async () => {
-    const d = await api('chat/clear', {method:'POST'});
-    $('chat-messages').innerHTML = '<div style="text-align:center;font-size:12px;color:var(--muted);padding:20px 0">Chat history cleared.</div>';
-    toast(d.message);
-  });
+  /* ─── Study tools ─────────────────────────────────────────────────────── */
+  if (window.mermaid) {
+    window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "default" });
+  }
+  let mermaidSeq = 0;
 
-  // Clear all data
-  $('clearBtn').addEventListener('click', async () => {
-    if (!confirm('Clear ALL knowledge data? This cannot be undone.')) return;
-    loader(true, 'Clearing…');
-    const d = await api('clear-data', {method:'POST'});
-    loader(false);
-    toast(d.message, !d.success);
-    if (d.success) refreshSources();
-  });
+  function resultShell(title, extra) {
+    const out = $("#tool-result");
+    out.hidden = false;
+    out.replaceChildren(el("div", { class: "result-head" }, el("h2", {}, title), extra || null));
+    return out;
+  }
 
-  // Enter key for inline inputs
-  ['qna-q','fc-topic','study_plan-topic','mock_test-topic','mindmap-topic','flowchart-topic','storyboard-topic'].forEach(id => {
-    const el = $(id);
-    if (!el) return;
-    el.addEventListener('keydown', e => {
-      if (e.key !== 'Enter') return;
-      const btn = el.closest('.tool-panel')?.querySelector('[data-action]');
-      if (btn) btn.click();
+  function skeleton(title) {
+    const out = resultShell(title);
+    for (const w of [92, 78, 85, 60]) out.append(el("div", { class: "skeleton", style: `width:${w}%` }));
+    out.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  async function renderMermaid(container, code) {
+    const wrap = el("div", { class: "mermaid-wrap" });
+    container.append(wrap);
+    if (!window.mermaid) { wrap.append(el("pre", {}, code)); return; }
+    try {
+      const { svg } = await window.mermaid.render(`kf-mmd-${++mermaidSeq}`, code);
+      wrap.innerHTML = svg; // produced by mermaid with securityLevel "strict"
+    } catch {
+      wrap.replaceChildren(el("p", { class: "placeholder" }, "The diagram could not be rendered. Raw definition:"), el("pre", {}, code));
+    }
+  }
+
+  function renderFlashcards(container, cards) {
+    const grid = el("div", { class: "flash-grid" });
+    cards.forEach((c, i) => {
+      const card = el("button", { class: "flashcard", type: "button", "aria-label": `Flashcard ${i + 1}, press to flip` },
+        el("div", { class: "flashcard-inner" },
+          el("div", { class: "face front" }, el("small", {}, `Card ${i + 1} · question`), String(c.front ?? c.question ?? "")),
+          el("div", { class: "face back" }, el("small", {}, "Answer"), String(c.back ?? c.answer ?? ""))));
+      card.addEventListener("click", () => card.classList.toggle("flipped"));
+      grid.append(card);
     });
+    container.append(el("p", { class: "muted", style: "margin-bottom:10px" }, "Click a card to flip it."), grid);
+  }
+
+  function renderStoryboard(container, scenes) {
+    const grid = el("div", { class: "story" });
+    scenes.forEach((s, i) => grid.append(el("div", { class: "scene" },
+      el("div", { class: "n" }, `Scene ${i + 1}`),
+      el("b", {}, String(s.title ?? s.heading ?? "")),
+      el("div", {}, String(s.scene ?? s.description ?? s.text ?? "")))));
+    container.append(grid);
+  }
+
+  async function runTool(tool, card) {
+    const topic = $("#tool-topic").value.trim();
+    const needsTopic = card.dataset.needsTopic !== "false";
+    if (needsTopic && !topic) {
+      toast("Enter a topic first.", "error");
+      $("#tool-topic").focus();
+      return;
+    }
+    if (!state.sources.length) { toast("Add a source first — tools work on your knowledge base.", "error"); return; }
+    $$(".tool-card").forEach((c) => { c.disabled = true; });
+    card.classList.add("busy");
+    const label = card.querySelector("strong").textContent;
+    skeleton(`Generating ${label.toLowerCase()}…`);
+    try {
+      const data = tool === "summary"
+        ? await api("/api/summarize", { method: "POST", body: { source: state.scope } })
+        : await api("/api/generate-tool-content", { method: "POST", body: { tool, topic, source: state.scope } });
+      const copyText = typeof data.content === "string" ? data.content : data.mermaid_code;
+      const out = resultShell(data.title || label, copyText ? el("button", {
+        class: "btn", onclick: () => navigator.clipboard?.writeText(copyText).then(() => toast("Copied.", "success", 1500)),
+      }, icon("copy"), "Copy") : null);
+      if (data.mermaid_code) await renderMermaid(out, data.mermaid_code);
+      else if (tool === "flashcards") renderFlashcards(out, data.content || []);
+      else if (tool === "storyboard") renderStoryboard(out, data.content || []);
+      else out.append(el("div", { class: "md", html: renderMarkdown(data.content) }));
+    } catch (err) {
+      resultShell(label).append(el("p", { class: "placeholder" }, err.message));
+      toast(err.message, "error");
+    } finally {
+      $$(".tool-card").forEach((c) => { c.disabled = false; });
+      card.classList.remove("busy");
+    }
+  }
+  $$(".tool-card").forEach((c) => c.addEventListener("click", () => runTool(c.dataset.tool, c)));
+  $("#tool-topic").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); const first = $('.tool-card[data-tool="mock_test"]'); runTool(first.dataset.tool, first); }
   });
 
+  /* ─── Insights ────────────────────────────────────────────────────────── */
+  $("#btn-entities").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const out = $("#entities-out");
+    setLoading(btn, true);
+    out.replaceChildren(el("div", { class: "skeleton", style: "width:70%" }), el("div", { class: "skeleton", style: "width:50%" }));
+    try {
+      const data = await api("/api/extract-entities", { method: "POST", body: { source: state.scope } });
+      const groups = Object.entries(data.entities || {}).filter(([, v]) => v.length);
+      out.replaceChildren(...(groups.length ? groups.map(([cat, items]) => el("div", { class: "ent-group" },
+        el("h4", {}, cat), el("div", { class: "tags" }, items.map((x) => el("span", { class: "tag" }, x)))))
+        : [el("p", { class: "placeholder" }, "No entities found.")]));
+    } catch (err) {
+      out.replaceChildren(el("p", { class: "placeholder" }, err.message));
+    } finally {
+      setLoading(btn, false);
+    }
+  });
+
+  $("#btn-clusters").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const out = $("#clusters-out");
+    setLoading(btn, true);
+    out.replaceChildren(el("div", { class: "skeleton", style: "width:100%;height:220px" }));
+    try {
+      const data = await api("/api/cluster-topics");
+      out.replaceChildren(
+        el("img", { class: "cluster-img", src: data.image, alt: `Topic clusters: ${(data.labels || []).join(", ")}` }),
+        el("div", { class: "tags", style: "margin-top:12px" }, (data.labels || []).map((l) => el("span", { class: "tag" }, l))));
+    } catch (err) {
+      out.replaceChildren(el("p", { class: "placeholder" }, err.message));
+    } finally {
+      setLoading(btn, false);
+    }
+  });
+
+  /* ─── Boot ────────────────────────────────────────────────────────────── */
+  window.KF = { renderMarkdown, escapeHtml }; // exposed for debugging/tests
+  renderChat();
   refreshSources();
-});
+})();

@@ -1,435 +1,201 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>KnowledgeForge V2 — AI Learning Companion</title>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
-<style>
-:root {
-  --primary:#2563eb; --primary-dark:#1d4ed8; --primary-light:#eff6ff;
-  --accent:#0891b2; --success:#059669; --error:#dc2626; --warn:#d97706;
-  --bg:#f8fafc; --surface:#ffffff; --border:#e2e8f0;
-  --text:#1e293b; --muted:#64748b; --subtle:#f1f5f9;
-  --shadow:0 1px 3px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.06);
-  --shadow-lg:0 8px 32px rgba(37,99,235,.12);
-  --radius:12px; --radius-sm:8px;
-}
-*{margin:0;padding:0;box-sizing:border-box;font-family:'Inter',sans-serif}
-body{background:var(--bg);color:var(--text);min-height:100vh}
-
-/* ─── Header ──────────────────────────────── */
-.header{background:linear-gradient(135deg,var(--primary) 0%,#1e40af 50%,var(--accent) 100%);
-  padding:0 32px;height:64px;display:flex;align-items:center;justify-content:space-between;
-  box-shadow:0 2px 12px rgba(37,99,235,.3);position:sticky;top:0;z-index:100}
-.logo{display:flex;align-items:center;gap:10px;color:#fff;font-weight:700;font-size:20px}
-.logo i{font-size:22px}
-.logo .badge{background:rgba(255,255,255,.25);padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;letter-spacing:.5px}
-.header-actions{display:flex;gap:10px}
-.btn-clear{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;
-  padding:8px 16px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;font-weight:500;
-  display:flex;align-items:center;gap:6px;transition:all .2s}
-.btn-clear:hover{background:rgba(255,255,255,.25)}
-
-/* ─── Layout ──────────────────────────────── */
-.layout{display:grid;grid-template-columns:340px 1fr;gap:0;height:calc(100vh - 64px)}
-
-/* ─── Sidebar ─────────────────────────────── */
-.sidebar{background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column}
-.sidebar-section{padding:20px;border-bottom:1px solid var(--border)}
-.sidebar-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.7px;margin-bottom:14px;display:flex;align-items:center;gap:6px}
-
-/* ─── Tabs ────────────────────────────────── */
-.tab-bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
-.tab{padding:6px 12px;border-radius:20px;cursor:pointer;font-size:12px;font-weight:500;
-  background:var(--subtle);color:var(--muted);border:1px solid transparent;transition:all .2s}
-.tab.active{background:var(--primary);color:#fff;border-color:var(--primary)}
-.tab-panel{display:none}.tab-panel.active{display:block}
-
-/* ─── Form Elements ───────────────────────── */
-.field{margin-bottom:12px}
-.field label{display:block;font-size:12px;font-weight:500;color:var(--muted);margin-bottom:5px}
-input[type=text],input[type=url],textarea,select{
-  width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);
-  font-size:13px;color:var(--text);background:var(--surface);transition:border .2s}
-input:focus,textarea:focus,select:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px rgba(37,99,235,.1)}
-textarea{resize:vertical;min-height:80px}
-
-/* Drop zone */
-.drop-zone{border:2px dashed var(--border);border-radius:var(--radius);padding:24px;text-align:center;
-  cursor:pointer;transition:all .2s;background:var(--subtle)}
-.drop-zone:hover,.drop-zone.drag-over{border-color:var(--primary);background:var(--primary-light)}
-.drop-zone i{font-size:28px;color:var(--muted);margin-bottom:8px;display:block}
-.drop-zone .dz-label{font-size:13px;color:var(--muted);font-weight:500}
-.drop-zone .dz-sub{font-size:11px;color:var(--muted);margin-top:4px}
-.progress-bar-wrap{margin-top:10px;display:none}
-.progress-bar{height:4px;background:var(--border);border-radius:4px;overflow:hidden}
-.progress-bar-fill{height:100%;background:var(--primary);width:0%;transition:width .3s;border-radius:4px}
-
-/* Buttons */
-.btn{display:inline-flex;align-items:center;gap:6px;padding:9px 16px;border-radius:var(--radius-sm);
-  font-size:13px;font-weight:600;cursor:pointer;border:none;transition:all .2s}
-.btn-primary{background:var(--primary);color:#fff}.btn-primary:hover{background:var(--primary-dark);transform:translateY(-1px)}
-.btn-secondary{background:var(--subtle);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--border)}
-.btn-sm{padding:6px 12px;font-size:12px}
-.btn-block{width:100%;justify-content:center}
-
-/* Source chips */
-.source-chips{display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto}
-.source-chip{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--subtle);
-  border-radius:var(--radius-sm);font-size:12px;border:1px solid var(--border)}
-.source-chip .chip-icon{width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;flex-shrink:0}
-.chip-web{background:#2563eb}.chip-youtube{background:#dc2626}.chip-pdf{background:#d97706}
-.chip-audio{background:#059669}.chip-video{background:#7c3aed}.chip-image{background:#0891b2}.chip-text{background:#64748b}
-.chip-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text)}
-
-/* ─── Main Panel ──────────────────────────── */
-.main{display:flex;flex-direction:column;overflow:hidden}
-.tools-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 24px}
-.tools-tabs{display:flex;gap:4px;flex-wrap:wrap}
-.tool-tab{padding:7px 14px;border-radius:var(--radius-sm);cursor:pointer;font-size:13px;font-weight:500;
-  color:var(--muted);background:transparent;border:1px solid transparent;transition:all .2s;display:flex;align-items:center;gap:5px}
-.tool-tab.active{background:var(--primary);color:#fff;border-color:var(--primary)}
-.tool-tab:hover:not(.active){background:var(--subtle);color:var(--text)}
-
-.tool-panel{display:none;padding:16px 24px;background:var(--surface);border-bottom:1px solid var(--border)}
-.tool-panel.active{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
-.tool-panel .field{margin-bottom:0;min-width:200px;flex:1}
-.tool-panel select{min-width:150px}
-
-/* Results */
-.results{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;gap:16px}
-.result-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
-  box-shadow:var(--shadow);overflow:hidden}
-.result-card-header{padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
-.result-card-title{font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:8px}
-.result-card-title i{color:var(--primary)}
-.result-card-actions{display:flex;gap:6px}
-.icon-btn{background:var(--subtle);border:1px solid var(--border);width:28px;height:28px;border-radius:6px;
-  cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--muted);transition:all .2s}
-.icon-btn:hover{background:var(--primary-light);color:var(--primary);border-color:var(--primary)}
-.result-card-body{padding:20px}
-
-/* Markdown-style content */
-.md-content{font-size:14px;line-height:1.7;color:var(--text);white-space:pre-wrap;word-break:break-word}
-.md-content h1,.md-content h2,.md-content h3{font-weight:600;margin:12px 0 6px;color:var(--text)}
-.md-content p{margin-bottom:8px}
-.md-content ul,.md-content ol{padding-left:20px;margin-bottom:8px}
-.md-content code{background:var(--subtle);padding:2px 6px;border-radius:4px;font-size:12px;font-family:monospace}
-.md-content strong{font-weight:600}
-
-/* Welcome card */
-.welcome-card{background:linear-gradient(135deg,var(--primary-light),#e0f2fe);border:1px solid #bfdbfe;border-radius:var(--radius);padding:28px;text-align:center}
-.welcome-card h2{font-size:20px;color:var(--primary-dark);margin-bottom:8px}
-.welcome-card p{color:var(--muted);font-size:14px}
-.feature-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:20px}
-.feature-item{background:var(--surface);border-radius:var(--radius-sm);padding:14px;text-align:center;border:1px solid var(--border)}
-.feature-item i{font-size:20px;color:var(--primary);display:block;margin-bottom:6px}
-.feature-item span{font-size:12px;color:var(--muted);font-weight:500}
-
-/* Mermaid */
-.mermaid-wrap{background:var(--subtle);border-radius:var(--radius-sm);padding:16px;overflow-x:auto;text-align:center}
-
-/* Flashcards */
-.flashcard-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
-.flashcard{perspective:600px;height:140px;cursor:pointer}
-.flashcard-inner{position:relative;width:100%;height:100%;transition:transform .5s;transform-style:preserve-3d}
-.flashcard.flipped .flashcard-inner{transform:rotateY(180deg)}
-.flashcard-front,.flashcard-back{position:absolute;inset:0;backface-visibility:hidden;border-radius:var(--radius-sm);
-  display:flex;align-items:center;justify-content:center;padding:16px;text-align:center;font-size:13px;font-weight:500;border:1px solid var(--border)}
-.flashcard-front{background:var(--primary);color:#fff}
-.flashcard-back{background:var(--surface);color:var(--text);transform:rotateY(180deg)}
-.fc-hint{font-size:10px;font-weight:400;opacity:.75;margin-top:6px;display:block}
-
-/* Storyboard */
-.storyboard-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-.storyboard-panel{background:var(--subtle);border:1px solid var(--border);border-radius:var(--radius-sm);padding:18px;text-align:center}
-.storyboard-panel i{font-size:36px;color:var(--primary);display:block;margin-bottom:10px}
-.storyboard-panel p{font-size:13px;color:var(--text);line-height:1.5}
-.storyboard-panel .panel-num{font-size:10px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
-
-/* Entity pills */
-.entity-group{margin-bottom:14px}
-.entity-group h4{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
-.entity-pill{display:inline-block;background:var(--primary-light);color:var(--primary-dark);padding:4px 10px;border-radius:12px;font-size:12px;font-weight:500;margin:3px;border:1px solid #bfdbfe}
-
-/* Chat */
-.chat-messages{display:flex;flex-direction:column;gap:12px;padding:20px;min-height:200px;max-height:400px;overflow-y:auto;background:var(--subtle);border-radius:var(--radius-sm)}
-.chat-msg{max-width:80%;padding:10px 14px;border-radius:var(--radius-sm);font-size:13px;line-height:1.5}
-.chat-msg.user{background:var(--primary);color:#fff;align-self:flex-end;border-bottom-right-radius:3px}
-.chat-msg.assistant{background:var(--surface);color:var(--text);align-self:flex-start;border:1px solid var(--border);border-bottom-left-radius:3px}
-.chat-input-row{display:flex;gap:8px;padding:12px 20px;border-top:1px solid var(--border)}
-.chat-input-row input{flex:1}
-
-/* Plot */
-.plot-img{max-width:100%;border-radius:var(--radius-sm);border:1px solid var(--border)}
-
-/* Notification */
-.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:var(--radius-sm);
-  color:#fff;font-size:13px;font-weight:500;box-shadow:0 4px 20px rgba(0,0,0,.15);
-  transform:translateY(80px);opacity:0;transition:all .3s;z-index:999;display:flex;align-items:center;gap:8px}
-.toast.show{transform:translateY(0);opacity:1}
-.toast.success{background:var(--success)}.toast.error{background:var(--error)}
-
-/* Loading */
-.overlay{position:fixed;inset:0;background:rgba(248,250,252,.8);backdrop-filter:blur(4px);
-  display:none;align-items:center;justify-content:center;z-index:200;flex-direction:column;gap:14px}
-.overlay.active{display:flex}
-.spinner{width:44px;height:44px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite}
-.overlay-text{font-size:13px;color:var(--muted);font-weight:500}
-@keyframes spin{to{transform:rotate(360deg)}}
-
-/* Responsive */
-@media(max-width:768px){
-  .layout{grid-template-columns:1fr;height:auto}
-  .sidebar{max-height:50vh}
-  .feature-grid{grid-template-columns:repeat(2,1fr)}
-  .storyboard-grid{grid-template-columns:1fr}
-}
-</style>
+<title>KnowledgeForge — AI learning companion</title>
+<meta name="description" content="Turn your documents, web pages and videos into a searchable study companion.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234f46e5'/><path d='M9 9h4v14H9zM15 15l7-6h4l-8 7 8 7h-4z' fill='white'/></svg>">
+<script>
+  // Apply the saved/system theme before first paint to avoid a flash.
+  (function () {
+    var t = localStorage.getItem("kf-theme") ||
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    document.documentElement.setAttribute("data-theme", t);
+  })();
+</script>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ version }}">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></symbol>
+  <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 16V4M7 9l5-5 5 5M4 20h16"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+  <symbol id="i-menu" viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="i-book" viewBox="0 0 24 24"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><circle cx="9" cy="14" r="2"/><circle cx="15" cy="9" r="2"/><circle cx="18" cy="15" r="2"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="m10 9 5 3-5 3z"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
+  <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/></symbol>
+</svg>
 
-<!-- Header -->
-<header class="header">
-  <div class="logo">
-    <i class="fas fa-brain"></i>
-    KnowledgeForge
-    <span class="badge">V2</span>
-  </div>
-  <div class="header-actions">
-    <button class="btn-clear" id="clearBtn"><i class="fas fa-trash-alt"></i> Clear Data</button>
-  </div>
-</header>
-
-<div class="layout">
-
-  <!-- ── Sidebar ─────────────────────────────────────────── -->
-  <aside class="sidebar">
-
-    <!-- Source Type Tabs -->
-    <div class="sidebar-section">
-      <div class="sidebar-title"><i class="fas fa-plus-circle"></i> Add Knowledge</div>
-      <div class="tab-bar" id="src-tabs">
-        <div class="tab active" data-tab="web">🌐 Web</div>
-        <div class="tab" data-tab="youtube">▶ YouTube</div>
-        <div class="tab" data-tab="text">📝 Text</div>
-        <div class="tab" data-tab="pdf">📄 PDF</div>
-        <div class="tab" data-tab="audio">🎵 Audio</div>
-        <div class="tab" data-tab="image">🖼 Image</div>
-        <div class="tab" data-tab="video">🎬 Video</div>
+<div class="app">
+  <aside class="sidebar" id="sidebar" aria-label="Knowledge base">
+    <div class="brand">
+      <div class="brand-mark" aria-hidden="true">K</div>
+      <div>
+        <div class="brand-name">KnowledgeForge</div>
+        <div class="brand-sub">v{{ version }} · study companion</div>
       </div>
-
-      <!-- Web -->
-      <div class="tab-panel active" id="web-panel">
-        <div class="field"><label>Web URL</label><input type="url" id="web-url" placeholder="https://example.com/article"></div>
-        <button class="btn btn-primary btn-block add-text-btn" data-type="web"><i class="fas fa-globe"></i> Add Web Content</button>
-      </div>
-
-      <!-- YouTube -->
-      <div class="tab-panel" id="youtube-panel">
-        <div class="field"><label>YouTube URL</label><input type="url" id="yt-url" placeholder="https://youtube.com/watch?v=..."></div>
-        <button class="btn btn-primary btn-block add-text-btn" data-type="youtube"><i class="fab fa-youtube"></i> Add Video Transcript</button>
-      </div>
-
-      <!-- Text -->
-      <div class="tab-panel" id="text-panel">
-        <div class="field"><label>Paste Text</label><textarea id="custom-text" placeholder="Paste notes, articles, content..."></textarea></div>
-        <button class="btn btn-primary btn-block add-text-btn" data-type="text"><i class="fas fa-file-alt"></i> Add Text</button>
-      </div>
-
-      <!-- PDF -->
-      <div class="tab-panel" id="pdf-panel">
-        <div class="drop-zone" id="pdf-drop" data-accept=".pdf,application/pdf">
-          <i class="fas fa-file-pdf"></i>
-          <div class="dz-label">Drop PDF here or click to browse</div>
-          <div class="dz-sub">Supports text & scanned PDFs</div>
-          <input type="file" accept=".pdf" style="display:none" id="pdf-input">
-        </div>
-        <div class="progress-bar-wrap" id="pdf-progress"><div class="progress-bar"><div class="progress-bar-fill" id="pdf-fill"></div></div></div>
-      </div>
-
-      <!-- Audio -->
-      <div class="tab-panel" id="audio-panel">
-        <div class="drop-zone" id="audio-drop">
-          <i class="fas fa-microphone-alt"></i>
-          <div class="dz-label">Drop audio lecture here</div>
-          <div class="dz-sub">MP3, WAV, M4A, OGG</div>
-          <input type="file" accept=".mp3,.wav,.m4a,.ogg,audio/*" style="display:none" id="audio-input">
-        </div>
-        <div class="progress-bar-wrap" id="audio-progress"><div class="progress-bar"><div class="progress-bar-fill" id="audio-fill"></div></div></div>
-      </div>
-
-      <!-- Image -->
-      <div class="tab-panel" id="image-panel">
-        <div class="drop-zone" id="image-drop">
-          <i class="fas fa-image"></i>
-          <div class="dz-label">Drop image/screenshot here</div>
-          <div class="dz-sub">JPG, PNG, WEBP, GIF</div>
-          <input type="file" accept=".jpg,.jpeg,.png,.gif,.webp,image/*" style="display:none" id="image-input">
-        </div>
-        <div class="progress-bar-wrap" id="image-progress"><div class="progress-bar"><div class="progress-bar-fill" id="image-fill"></div></div></div>
-      </div>
-
-      <!-- Video -->
-      <div class="tab-panel" id="video-panel">
-        <div class="drop-zone" id="video-drop">
-          <i class="fas fa-video"></i>
-          <div class="dz-label">Drop lecture video here</div>
-          <div class="dz-sub">MP4, WEBM, MOV</div>
-          <input type="file" accept=".mp4,.webm,.mov,video/*" style="display:none" id="video-input">
-        </div>
-        <div class="progress-bar-wrap" id="video-progress"><div class="progress-bar"><div class="progress-bar-fill" id="video-fill"></div></div></div>
-      </div>
+      <button class="icon-btn only-mobile" id="close-sidebar" aria-label="Close sidebar"><svg><use href="#i-x"/></svg></button>
     </div>
 
-    <!-- Active Sources -->
-    <div class="sidebar-section" style="flex:1">
-      <div class="sidebar-title"><i class="fas fa-database"></i> Knowledge Sources</div>
-      <div class="source-chips" id="source-chips">
-        <div style="font-size:12px;color:var(--muted);text-align:center;padding:10px 0">No sources added yet</div>
+    <section class="panel">
+      <h2 class="panel-title">Add a source</h2>
+      <div class="segmented" role="tablist" aria-label="Source type">
+        <button role="tab" class="seg active" data-add="link" aria-selected="true"><svg><use href="#i-link"/></svg>Link</button>
+        <button role="tab" class="seg" data-add="text" aria-selected="false"><svg><use href="#i-text"/></svg>Text</button>
+        <button role="tab" class="seg" data-add="file" aria-selected="false"><svg><use href="#i-upload"/></svg>File</button>
       </div>
-    </div>
 
+      <form class="add-form" id="form-link" data-pane="link">
+        <label class="sr-only" for="link-input">Web page or YouTube URL</label>
+        <input id="link-input" type="url" placeholder="https://… web page or YouTube link" required autocomplete="off">
+        <p class="hint">YouTube links are detected automatically and their transcript is used.</p>
+        <button class="btn primary block" type="submit"><svg><use href="#i-plus"/></svg>Add link</button>
+      </form>
+
+      <form class="add-form hidden" id="form-text" data-pane="text">
+        <label class="sr-only" for="text-title">Title</label>
+        <input id="text-title" type="text" placeholder="Title (optional)" maxlength="120">
+        <label class="sr-only" for="text-input">Notes</label>
+        <textarea id="text-input" rows="5" placeholder="Paste notes, an article or lecture text…" required></textarea>
+        <button class="btn primary block" type="submit"><svg><use href="#i-plus"/></svg>Add text</button>
+      </form>
+
+      <form class="add-form hidden" id="form-file" data-pane="file">
+        <label class="dropzone" id="dropzone" for="file-input" tabindex="0">
+          <svg><use href="#i-upload"/></svg>
+          <span class="dz-title">Drop a file or <u>browse</u></span>
+          <span class="dz-sub" id="dz-sub">PDF, TXT, MD, audio, video or image · up to {{ max_upload_mb }} MB</span>
+          <input id="file-input" type="file" hidden
+                 accept=".pdf,.txt,.md,.mp3,.wav,.m4a,.ogg,.mp4,.webm,.mov,.png,.jpg,.jpeg,.gif,.webp">
+        </label>
+        <button class="btn primary block" type="submit" id="upload-btn" disabled><svg><use href="#i-upload"/></svg>Upload</button>
+      </form>
+    </section>
+
+    <section class="panel grow">
+      <div class="panel-head">
+        <h2 class="panel-title">Sources <span class="count" id="source-count">0</span></h2>
+        <button class="link-btn danger" id="clear-all" hidden>Clear all</button>
+      </div>
+      <div class="scope" id="scope-hint">Answers use <strong>all sources</strong>. Select one to focus.</div>
+      <ul class="source-list" id="source-list" aria-live="polite"></ul>
+      <div class="empty-mini" id="sources-empty">
+        <svg><use href="#i-book"/></svg>
+        <p>No sources yet. Add a link, paste notes or upload a file to get started.</p>
+      </div>
+    </section>
+
+    <footer class="sidebar-foot">
+      <span class="kb-stats" id="kb-stats">0 chunks</span>
+      <button class="icon-btn" id="theme-toggle" aria-label="Toggle dark mode" title="Toggle theme">
+        <svg class="show-light"><use href="#i-moon"/></svg><svg class="show-dark"><use href="#i-sun"/></svg>
+      </button>
+    </footer>
   </aside>
+  <div class="scrim" id="scrim" hidden></div>
 
-  <!-- ── Main ──────────────────────────────────────────────── -->
   <main class="main">
-
-    <!-- Tool Bar -->
-    <div class="tools-bar">
-      <div class="tools-tabs" id="tool-tabs">
-        <div class="tool-tab active" data-tool="qna"><i class="fas fa-question-circle"></i> Q&amp;A</div>
-        <div class="tool-tab" data-tool="chat"><i class="fas fa-comments"></i> Chat</div>
-        <div class="tool-tab" data-tool="summarize"><i class="fas fa-align-left"></i> Summarize</div>
-        <div class="tool-tab" data-tool="flashcards"><i class="fas fa-clone"></i> Flashcards</div>
-        <div class="tool-tab" data-tool="study_plan"><i class="fas fa-calendar-check"></i> Study Plan</div>
-        <div class="tool-tab" data-tool="mock_test"><i class="fas fa-clipboard-list"></i> Mock Test</div>
-        <div class="tool-tab" data-tool="mindmap"><i class="fas fa-project-diagram"></i> Mind Map</div>
-        <div class="tool-tab" data-tool="flowchart"><i class="fas fa-sitemap"></i> Flowchart</div>
-        <div class="tool-tab" data-tool="storyboard"><i class="fas fa-film"></i> Storyboard</div>
-        <div class="tool-tab" data-tool="entities"><i class="fas fa-tags"></i> Entities</div>
-        <div class="tool-tab" data-tool="topics"><i class="fas fa-chart-scatter"></i> Topics</div>
+    <header class="topbar">
+      <button class="icon-btn only-mobile" id="open-sidebar" aria-label="Open sidebar"><svg><use href="#i-menu"/></svg></button>
+      <nav class="tabs" role="tablist" aria-label="Views">
+        <button role="tab" class="tab active" data-view="chat" aria-selected="true"><svg><use href="#i-chat"/></svg><span>Chat</span></button>
+        <button role="tab" class="tab" data-view="tools" aria-selected="false"><svg><use href="#i-book"/></svg><span>Study tools</span></button>
+        <button role="tab" class="tab" data-view="insights" aria-selected="false"><svg><use href="#i-chart"/></svg><span>Insights</span></button>
+      </nav>
+      <div class="scope-pill" id="scope-pill" hidden>
+        <span id="scope-pill-text"></span>
+        <button class="icon-btn tiny" id="scope-clear" aria-label="Use all sources"><svg><use href="#i-x"/></svg></button>
       </div>
+    </header>
+
+    <div class="banner warn" id="key-banner" hidden>
+      <strong>Gemini API key missing.</strong> Set <code>GEMINI_API_KEY</code> in your environment (see <code>.env.example</code>) and restart the server.
     </div>
 
-    <!-- Tool Input Panels -->
-    <div id="tool-inputs">
-
-      <!-- Q&A -->
-      <div class="tool-panel active" id="tp-qna">
-        <div class="field"><label>Your Question</label><input type="text" id="qna-q" placeholder="Ask anything about your content..."></div>
-        <div class="field"><label>Source</label><select class="src-filter" id="qna-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="qna"><i class="fas fa-search"></i> Ask</button>
-      </div>
-
-      <!-- Chat -->
-      <div class="tool-panel" id="tp-chat">
-        <div class="field"><label>Source</label><select class="src-filter" id="chat-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-secondary btn-sm" id="clearChatBtn"><i class="fas fa-broom"></i> Clear History</button>
-      </div>
-
-      <!-- Summarize -->
-      <div class="tool-panel" id="tp-summarize">
-        <div class="field"><label>Source (optional)</label><select class="src-filter" id="sum-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="summarize"><i class="fas fa-align-left"></i> Summarize</button>
-      </div>
-
-      <!-- Flashcards -->
-      <div class="tool-panel" id="tp-flashcards">
-        <div class="field"><label>Topic</label><input type="text" id="fc-topic" placeholder="e.g., Neural Networks"></div>
-        <div class="field"><label>Source</label><select class="src-filter" id="fc-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="tool" data-tool="flashcards"><i class="fas fa-clone"></i> Generate</button>
-      </div>
-
-      <!-- Study Plan -->
-      <div class="tool-panel" id="tp-study_plan">
-        <div class="field"><label>Topic / Goal</label><input type="text" id="study_plan-topic" placeholder="e.g., Learn Python in 4 weeks"></div>
-        <div class="field"><label>Source</label><select class="src-filter" id="study_plan-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="tool" data-tool="study_plan"><i class="fas fa-calendar-check"></i> Generate Plan</button>
-      </div>
-
-      <!-- Mock Test -->
-      <div class="tool-panel" id="tp-mock_test">
-        <div class="field"><label>Topic</label><input type="text" id="mock_test-topic" placeholder="e.g., Machine Learning"></div>
-        <div class="field"><label>Source</label><select class="src-filter" id="mock_test-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="tool" data-tool="mock_test"><i class="fas fa-clipboard-list"></i> Create Test</button>
-      </div>
-
-      <!-- Mind Map -->
-      <div class="tool-panel" id="tp-mindmap">
-        <div class="field"><label>Topic</label><input type="text" id="mindmap-topic" placeholder="e.g., Deep Learning"></div>
-        <div class="field"><label>Source</label><select class="src-filter" id="mindmap-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="tool" data-tool="mindmap"><i class="fas fa-project-diagram"></i> Create Map</button>
-      </div>
-
-      <!-- Flowchart -->
-      <div class="tool-panel" id="tp-flowchart">
-        <div class="field"><label>Process / Topic</label><input type="text" id="flowchart-topic" placeholder="e.g., Training a Neural Network"></div>
-        <div class="field"><label>Source</label><select class="src-filter" id="flowchart-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="tool" data-tool="flowchart"><i class="fas fa-sitemap"></i> Create Flowchart</button>
-      </div>
-
-      <!-- Storyboard -->
-      <div class="tool-panel" id="tp-storyboard">
-        <div class="field"><label>Topic</label><input type="text" id="storyboard-topic" placeholder="e.g., User Journey"></div>
-        <div class="field"><label>Source</label><select class="src-filter" id="storyboard-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="tool" data-tool="storyboard"><i class="fas fa-film"></i> Create Storyboard</button>
-      </div>
-
-      <!-- Entities -->
-      <div class="tool-panel" id="tp-entities">
-        <div class="field"><label>Source</label><select class="src-filter" id="entities-src"><option value="">All Sources</option></select></div>
-        <button class="btn btn-primary" data-action="entities"><i class="fas fa-tags"></i> Extract Entities</button>
-      </div>
-
-      <!-- Topics -->
-      <div class="tool-panel" id="tp-topics">
-        <p style="font-size:13px;color:var(--muted);align-self:center">Cluster all content into topics visually (needs ≥5 chunks)</p>
-        <button class="btn btn-primary" data-action="topics"><i class="fas fa-chart-scatter"></i> Analyze Topics</button>
-      </div>
-
-    </div><!-- end tool-inputs -->
-
-    <!-- Chat UI (shown only when Chat tab active) -->
-    <div id="chat-ui" style="display:none;border-bottom:1px solid var(--border)">
-      <div class="chat-messages" id="chat-messages">
-        <div style="text-align:center;font-size:12px;color:var(--muted);padding:20px 0">Start a conversation — your chat history is remembered within this session.</div>
-      </div>
-      <div class="chat-input-row">
-        <input type="text" id="chat-input" placeholder="Type your message...">
-        <button class="btn btn-primary" id="chat-send"><i class="fas fa-paper-plane"></i> Send</button>
-      </div>
-    </div>
-
-    <!-- Results -->
-    <div class="results" id="results">
-      <div class="welcome-card">
-        <h2><i class="fas fa-brain" style="color:var(--primary)"></i> Welcome to KnowledgeForge V2</h2>
-        <p>Add knowledge from any source, then use powerful AI tools to learn from it.</p>
-        <div class="feature-grid">
-          <div class="feature-item"><i class="fas fa-file-pdf"></i><span>PDF, Audio, Video, Images</span></div>
-          <div class="feature-item"><i class="fas fa-search"></i><span>Hybrid RAG Search</span></div>
-          <div class="feature-item"><i class="fas fa-clone"></i><span>Flashcards &amp; Plans</span></div>
-          <div class="feature-item"><i class="fas fa-comments"></i><span>Multi-turn Chat</span></div>
-          <div class="feature-item"><i class="fas fa-project-diagram"></i><span>Mind Maps</span></div>
-          <div class="feature-item"><i class="fas fa-gem"></i><span>Gemini 2.0 Powered</span></div>
+    <!-- Chat -->
+    <section class="view" id="view-chat" data-view-pane="chat">
+      <div class="chat-scroll" id="chat-scroll">
+        <div class="chat-inner" id="chat-log"></div>
+        <div class="empty-state" id="chat-empty">
+          <div class="empty-icon"><svg><use href="#i-spark"/></svg></div>
+          <h1>Ask anything about your sources</h1>
+          <p>Answers are grounded in your knowledge base and cite the passages they use.</p>
+          <div class="suggestions" id="suggestions">
+            <button class="chip" data-prompt="Give me a short overview of the key ideas.">Overview of key ideas</button>
+            <button class="chip" data-prompt="Explain the hardest concept here in simple terms.">Explain the hardest concept</button>
+            <button class="chip" data-prompt="What are 5 questions I should be able to answer after studying this?">Self-check questions</button>
+          </div>
         </div>
       </div>
-    </div>
+      <form class="composer" id="chat-form">
+        <label class="sr-only" for="chat-input">Message</label>
+        <textarea id="chat-input" rows="1" placeholder="Ask a question…  (Enter to send, Shift+Enter for a new line)" maxlength="4000"></textarea>
+        <div class="composer-actions">
+          <button type="button" class="icon-btn" id="chat-clear" title="Clear conversation" aria-label="Clear conversation"><svg><use href="#i-trash"/></svg></button>
+          <button type="submit" class="btn primary" id="chat-send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </form>
+    </section>
 
+    <!-- Study tools -->
+    <section class="view hidden" id="view-tools" data-view-pane="tools">
+      <div class="view-inner">
+        <div class="tool-bar">
+          <label class="sr-only" for="tool-topic">Topic</label>
+          <input id="tool-topic" type="text" placeholder="Topic, e.g. “photosynthesis” or “chapter 3”" maxlength="300">
+        </div>
+        <div class="tool-grid" id="tool-grid">
+          <button class="tool-card" data-tool="summary" data-needs-topic="false"><strong>Summary</strong><span>Concise bullet summary of the selected source(s)</span></button>
+          <button class="tool-card" data-tool="mock_test"><strong>Mock test</strong><span>Mixed MCQs, short and long answers with a key</span></button>
+          <button class="tool-card" data-tool="flashcards"><strong>Flashcards</strong><span>Flip cards for quick recall</span></button>
+          <button class="tool-card" data-tool="mindmap"><strong>Mind map</strong><span>Visual map of related concepts</span></button>
+          <button class="tool-card" data-tool="flowchart"><strong>Flowchart</strong><span>Step-by-step process diagram</span></button>
+          <button class="tool-card" data-tool="storyboard"><strong>Storyboard</strong><span>The topic told as a sequence of scenes</span></button>
+          <button class="tool-card" data-tool="study_plan"><strong>Study plan</strong><span>A structured multi-day plan</span></button>
+        </div>
+        <div class="result" id="tool-result" hidden></div>
+      </div>
+    </section>
+
+    <!-- Insights -->
+    <section class="view hidden" id="view-insights" data-view-pane="insights">
+      <div class="view-inner">
+        <div class="insight-grid">
+          <article class="card">
+            <div class="card-head">
+              <div><h3>Key entities</h3><p class="muted">People, places, concepts and terms found in your sources.</p></div>
+              <button class="btn" id="btn-entities">Extract</button>
+            </div>
+            <div id="entities-out" class="card-body"><p class="placeholder">Run extraction to see entities.</p></div>
+          </article>
+          <article class="card">
+            <div class="card-head">
+              <div><h3>Topic clusters</h3><p class="muted">Groups similar passages and labels each theme. Needs at least 5 chunks.</p></div>
+              <button class="btn" id="btn-clusters">Cluster</button>
+            </div>
+            <div id="clusters-out" class="card-body"><p class="placeholder">Run clustering to see a topic map.</p></div>
+          </article>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
-<!-- Toast & Overlay -->
-<div class="toast" id="toast"></div>
-<div class="overlay" id="overlay">
-  <div class="spinner"></div>
-  <div class="overlay-text" id="overlay-text">Processing...</div>
-</div>
+<div class="toasts" id="toasts" aria-live="assertive"></div>
 
-<script src="/static/app.js"></script>
+<script src="{{ url_for('static', filename='mermaid.min.js') }}"></script>
+<script src="{{ url_for('static', filename='app.js') }}?v={{ version }}"></script>
 </body>
 </html>
