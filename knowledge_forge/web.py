@@ -415,7 +415,8 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
     def index():
         return render_template(
             "index.html", version=__version__, max_upload_mb=settings.max_upload_mb,
-            max_question_chars=settings.max_question_chars,
+            max_question_chars=settings.max_question_chars, crawl_max_pages=settings.crawl_site_max_pages,
+            crawl_default_pages=settings.crawl_site_default_pages, crawl_max_depth=settings.crawl_site_max_depth,
         )
 
     @app.route("/api/health")

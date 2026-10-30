@@ -41,6 +41,11 @@
   <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
   <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
   <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></symbol>
+  <symbol id="i-graph" viewBox="0 0 24 24"><circle cx="5" cy="6" r="2.5"/><circle cx="19" cy="6" r="2.5"/><circle cx="12" cy="18" r="2.5"/><path d="M7.3 7.2 10.5 16M16.7 7.2 13.5 16M7.5 6h9"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 24 24"><path d="m15 4 5 5L9 20H4v-5z"/><path d="M13 6l5 5"/></symbol>
+  <symbol id="i-sitemap" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-3h14v3"/></symbol>
+  <symbol id="i-chat-q" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5M12 16h.01"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></symbol>
 </svg>
 
@@ -60,6 +65,7 @@
       <h2 class="panel-title">Add a source</h2>
       <div class="segmented" role="tablist" aria-label="Source type">
         <button role="tab" class="seg active" data-add="link" aria-selected="true"><svg><use href="#i-link"/></svg>Link</button>
+        <button role="tab" class="seg" data-add="site" aria-selected="false"><svg><use href="#i-sitemap"/></svg>Site</button>
         <button role="tab" class="seg" data-add="text" aria-selected="false"><svg><use href="#i-text"/></svg>Text</button>
         <button role="tab" class="seg" data-add="file" aria-selected="false"><svg><use href="#i-upload"/></svg>File</button>
       </div>
@@ -74,6 +80,21 @@
         </label>
         <p class="hint" id="render-js-hint">For single-page apps and lazy-loaded pages. Uses a sandboxed headless browser; slower.</p>
         <button class="btn primary block" type="submit"><svg><use href="#i-plus"/></svg>Add link</button>
+      </form>
+
+      <form class="add-form hidden" id="form-site" data-pane="site">
+        <label class="sr-only" for="site-input">Website start URL</label>
+        <input id="site-input" type="url" placeholder="https://docs.example.com/ — crawl a whole site" required autocomplete="off">
+        <div class="field-row">
+          <label class="mini">Max pages<input id="site-pages" type="number" min="1" max="{{ crawl_max_pages }}" value="{{ crawl_default_pages }}"></label>
+          <label class="mini">Depth<input id="site-depth" type="number" min="0" max="{{ crawl_max_depth }}" value="2"></label>
+        </div>
+        <label class="mini">Only under path (optional)<input id="site-prefix" type="text" placeholder="/docs/" maxlength="200"></label>
+        <label class="check"><input type="checkbox" id="site-sitemap" checked><span>Use sitemap.xml</span></label>
+        <label class="check"><input type="checkbox" id="site-subdomains"><span>Include subdomains</span></label>
+        <label class="check" id="site-js-wrap"><input type="checkbox" id="site-js"><span>Render JavaScript</span></label>
+        <p class="hint">Same-site pages and PDFs only. Respects robots.txt and crawl-delay; private addresses are blocked on every redirect.</p>
+        <button class="btn primary block" type="submit"><svg><use href="#i-sitemap"/></svg>Crawl site</button>
       </form>
 
       <form class="add-form hidden" id="form-text" data-pane="text">
@@ -94,6 +115,11 @@
         </label>
         <button class="btn primary block" type="submit" id="upload-btn" disabled><svg><use href="#i-upload"/></svg>Upload</button>
       </form>
+    </section>
+
+    <section class="panel" id="crawl-panel" hidden aria-labelledby="crawl-title">
+      <div class="panel-head"><h2 class="panel-title" id="crawl-title">Site crawls</h2></div>
+      <div id="crawl-jobs" class="crawl-jobs" aria-live="polite"></div>
     </section>
 
     <section class="panel grow">
@@ -125,6 +151,9 @@
       <button class="icon-btn only-mobile" id="open-sidebar" aria-label="Open sidebar"><svg><use href="#i-menu"/></svg></button>
       <nav class="tabs" role="tablist" aria-label="Views">
         <button role="tab" class="tab active" id="tab-chat" aria-controls="view-chat" data-view="chat" aria-selected="true"><svg><use href="#i-chat"/></svg><span>Chat</span></button>
+        <button role="tab" class="tab" id="tab-search" aria-controls="view-search" data-view="search" aria-selected="false"><svg><use href="#i-search"/></svg><span>Search</span></button>
+        <button role="tab" class="tab" id="tab-create" aria-controls="view-create" data-view="create" aria-selected="false"><svg><use href="#i-wand"/></svg><span>Create</span></button>
+        <button role="tab" class="tab" id="tab-graph" aria-controls="view-graph" data-view="graph" aria-selected="false"><svg><use href="#i-graph"/></svg><span>Graph</span></button>
         <button role="tab" class="tab" id="tab-tools" aria-controls="view-tools" data-view="tools" aria-selected="false"><svg><use href="#i-book"/></svg><span>Study tools</span></button>
         <button role="tab" class="tab" id="tab-insights" aria-controls="view-insights" data-view="insights" aria-selected="false"><svg><use href="#i-chart"/></svg><span>Insights</span></button>
       </nav>
@@ -167,6 +196,65 @@
         </div>
       </form>
       <p class="composer-hint" id="composer-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>/</kbd> focus · <kbd>?</kbd> shortcuts</p>
+    </section>
+
+    <!-- Search -->
+    <section class="view hidden" id="view-search" data-view-pane="search" role="tabpanel" aria-labelledby="tab-search">
+      <div class="view-inner">
+        <form class="search-bar" id="search-form" role="search">
+          <label class="sr-only" for="search-input">Search your knowledge base</label>
+          <input id="search-input" type="search" placeholder="Search every page, PDF and note…" maxlength="{{ max_question_chars }}" autocomplete="off">
+          <button class="btn primary" type="submit"><svg><use href="#i-search"/></svg>Search</button>
+        </form>
+        <div class="filters" id="search-filters">
+          <label class="mini">Type<select id="filter-type" aria-label="Filter by type"><option value="">All types</option></select></label>
+          <label class="mini">Site<select id="filter-site" aria-label="Filter by site"><option value="">All sites</option></select></label>
+          <label class="mini">Source<select id="filter-source" aria-label="Filter by source"><option value="">All sources</option></select></label>
+        </div>
+        <div id="search-results" class="search-results" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <!-- Create hub -->
+    <section class="view hidden" id="view-create" data-view-pane="create" role="tabpanel" aria-labelledby="tab-create">
+      <div class="view-inner">
+        <div class="segmented create-seg" role="tablist" aria-label="Create">
+          <button role="tab" class="cseg active" data-create="storyboard" aria-selected="true">Storyboard</button>
+          <button role="tab" class="cseg" data-create="flashcards" aria-selected="false">Flashcards</button>
+        </div>
+        <form class="create-form" id="create-form">
+          <label class="mini grow">Topic (optional — blank uses everything in scope)<input id="create-topic" type="text" maxlength="300" placeholder="e.g. how the French Revolution led to Napoleon"></label>
+          <label class="mini">Source group<select id="create-group"><option value="">All sources</option></select></label>
+          <label class="mini" data-for="storyboard">Frames<input id="sb-frames" type="number" min="2" max="16" value="6"></label>
+          <label class="mini" data-for="storyboard">Style<select id="sb-style"><option>clear and friendly</option><option>documentary</option><option>for kids</option><option>technical deep-dive</option></select></label>
+          <label class="mini hidden" data-for="flashcards">Cards<input id="fc-count" type="number" min="1" max="50" value="12"></label>
+          <label class="mini hidden" data-for="flashcards">Difficulty<select id="fc-difficulty"><option>mixed</option><option>easy</option><option>medium</option><option>hard</option></select></label>
+          <button class="btn primary" type="submit" id="create-go"><svg><use href="#i-spark"/></svg>Generate</button>
+        </form>
+        <div id="create-out" class="create-out" aria-live="polite"></div>
+        <div id="decks" class="decks"></div>
+      </div>
+    </section>
+
+    <!-- Knowledge graph -->
+    <section class="view hidden" id="view-graph" data-view-pane="graph" role="tabpanel" aria-labelledby="tab-graph">
+      <div class="view-inner wide">
+        <div class="graph-bar">
+          <label class="mini">Scope<select id="graph-group"><option value="">All sources</option></select></label>
+          <label class="mini grow">Focus topic (optional)<input id="graph-topic" type="text" maxlength="300" placeholder="Leave blank for the whole knowledge base"></label>
+          <button class="btn primary" id="graph-build"><svg><use href="#i-graph"/></svg>Build graph</button>
+        </div>
+        <div class="segmented graph-seg" role="tablist" aria-label="Graph views">
+          <button role="tab" class="gseg active" data-gview="graph" aria-selected="true">Graph</button>
+          <button role="tab" class="gseg" data-gview="overview" aria-selected="false">Overview</button>
+          <button role="tab" class="gseg" data-gview="map" aria-selected="false">Concept map</button>
+          <button role="tab" class="gseg" data-gview="glossary" aria-selected="false">Glossary</button>
+          <button role="tab" class="gseg" data-gview="timeline" aria-selected="false">Timeline</button>
+          <button role="tab" class="gseg" data-gview="connect" aria-selected="false">Connect</button>
+          <button role="tab" class="gseg" data-gview="related" aria-selected="false">Related</button>
+        </div>
+        <div id="graph-out" class="graph-out"><p class="placeholder">Build the graph to explore entities and how they relate.</p></div>
+      </div>
     </section>
 
     <!-- Study tools -->
@@ -222,7 +310,9 @@
   <dl class="keys">
     <dt><kbd>/</kbd></dt><dd>Focus the message box</dd>
     <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Add a link</dd>
-    <dt><kbd>Alt</kbd> <kbd>1</kbd>–<kbd>3</kbd></dt><dd>Chat, study tools, insights</dd>
+    <dt><kbd>Alt</kbd> <kbd>1</kbd>–<kbd>6</kbd></dt><dd>Chat, search, create, graph, study tools, insights</dd>
+    <dt><kbd>←</kbd> <kbd>→</kbd> <kbd>Space</kbd> <kbd>F</kbd></dt><dd>Storyboard present mode: previous / next, fullscreen; <kbd>Esc</kbd> exits</dd>
+    <dt><kbd>1</kbd>–<kbd>4</kbd></dt><dd>Grade the current review card (again, hard, good, easy)</dd>
     <dt><kbd>Esc</kbd></dt><dd>Stop generating / close panels</dd>
     <dt><kbd>Space</kbd></dt><dd>Flip the current flashcard</dd>
     <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Previous / next flashcard</dd>
@@ -232,5 +322,10 @@
 
 <script src="{{ url_for('static', filename='mermaid.min.js') }}"></script>
 <script src="{{ url_for('static', filename='app.js') }}?v={{ version }}"></script>
+<script src="{{ url_for('static', filename='sm2.js') }}?v={{ version }}"></script>
+<script src="{{ url_for('static', filename='crawl.js') }}?v={{ version }}"></script>
+<script src="{{ url_for('static', filename='search.js') }}?v={{ version }}"></script>
+<script src="{{ url_for('static', filename='create.js') }}?v={{ version }}"></script>
+<script src="{{ url_for('static', filename='graph.js') }}?v={{ version }}"></script>
 </body>
 </html>

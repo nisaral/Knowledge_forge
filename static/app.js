@@ -7,6 +7,7 @@
   const HISTORY_KEY = "kf-chat-v1";
   const MAX_STORED_MESSAGES = 60;
 
+  const sourceListeners = [];
   const state = {
     sources: [],
     scope: null,            // selected source name or null for all
@@ -192,7 +193,9 @@
     });
     $$("[data-view-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.viewPane !== name));
     if (name === "chat") $("#chat-input").focus();
+    document.dispatchEvent(new CustomEvent("kf:view", { detail: name }));
   }
+  const VIEWS = () => $$(".tab").map((t) => t.dataset.view);
   $$(".tab").forEach((t) => t.addEventListener("click", () => showView(t.dataset.view)));
 
   /* ─── Add-source forms ────────────────────────────────────────────────── */
@@ -292,26 +295,52 @@
     return src;
   }
 
+  function sourceItem(s) {
+    const selected = state.scope === s.source;
+    return el("li", {
+      class: `source${selected ? " selected" : ""}`, tabindex: "0", role: "button",
+      "aria-pressed": selected, title: s.source,
+      onclick: () => setScope(selected ? null : s.source),
+      onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setScope(selected ? null : s.source); } },
+    },
+    el("span", { class: "source-icon" }, icon(TYPE_ICON[s.type] || "file")),
+    el("span", { class: "source-meta" },
+      el("div", { class: "source-name" }, s.title && s.group ? s.title : displayName(s.source)),
+      el("div", { class: "source-sub" }, `${s.group ? displayName(s.source) + " · " : ""}${s.type} · ${s.chunks} chunk${s.chunks === 1 ? "" : "s"}`)),
+    el("button", {
+      class: "icon-btn danger", "aria-label": `Remove ${s.source}`, title: "Remove source",
+      onclick: (e) => { e.stopPropagation(); deleteSource(s.source); },
+    }, icon("trash")));
+  }
+
+  const openGroups = new Set();
   function renderSources() {
     const list = $("#source-list");
     list.replaceChildren();
+    const groups = new Map();
     for (const s of state.sources) {
-      const selected = state.scope === s.source;
-      const li = el("li", {
-        class: `source${selected ? " selected" : ""}`, tabindex: "0", role: "button",
-        "aria-pressed": selected, title: s.source,
-        onclick: () => setScope(selected ? null : s.source),
-        onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setScope(selected ? null : s.source); } },
-      },
-      el("span", { class: "source-icon" }, icon(TYPE_ICON[s.type] || "file")),
-      el("span", { class: "source-meta" },
-        el("div", { class: "source-name" }, displayName(s.source)),
-        el("div", { class: "source-sub" }, `${s.type} · ${s.chunks} chunk${s.chunks === 1 ? "" : "s"}`)),
-      el("button", {
-        class: "icon-btn danger", "aria-label": `Remove ${s.source}`, title: "Remove source",
-        onclick: (e) => { e.stopPropagation(); deleteSource(s.source); },
-      }, icon("trash")));
-      list.append(li);
+      if (!s.group) { list.append(sourceItem(s)); continue; }
+      if (!groups.has(s.group)) groups.set(s.group, []);
+      groups.get(s.group).push(s);
+    }
+    for (const [group, items] of groups) {
+      const open = openGroups.has(group) || items.some((s) => s.source === state.scope);
+      const chunks = items.reduce((a, s) => a + s.chunks, 0);
+      const inner = el("ul", { class: "source-list nested", hidden: !open }, items.map(sourceItem));
+      const head = el("li", { class: "source group" },
+        el("button", {
+          class: "group-toggle", "aria-expanded": String(open), title: group,
+          onclick: () => { open ? openGroups.delete(group) : openGroups.add(group); renderSources(); },
+        },
+        el("span", { class: "source-icon" }, icon("globe")),
+        el("span", { class: "source-meta" },
+          el("div", { class: "source-name" }, group.replace(/^site:/, "")),
+          el("div", { class: "source-sub" }, `site · ${items.length} page${items.length === 1 ? "" : "s"} · ${chunks} chunks`))),
+        el("button", {
+          class: "icon-btn danger", "aria-label": `Remove the whole site ${group}`, title: "Remove the whole site",
+          onclick: (e) => { e.stopPropagation(); deleteGroup(group, items.length); },
+        }, icon("trash")));
+      list.append(head, el("li", { class: "group-body" }, inner));
     }
     const n = state.sources.length;
     $("#source-count").textContent = n;
@@ -357,6 +386,7 @@
       applyRenderJs(data.render_js);
       renderSources();
       renderSuggestions();
+      sourceListeners.forEach((fn) => { try { fn(state.sources); } catch { /* listener bug */ } });
     } catch (err) {
       toast(err.message, "error");
       $("#sources-empty").hidden = false;
@@ -372,6 +402,18 @@
     try {
       const data = await api("/api/delete-source", { method: "POST", body: { source } });
       toast(data.message, "success");
+      await refreshSources();
+    } catch (err) {
+      toast(err.message, "error");
+    }
+  }
+
+  async function deleteGroup(group, pages) {
+    if (!confirm(`Remove the whole site "${group.replace(/^site:/, "")}" (${pages} pages) from your knowledge base?`)) return;
+    try {
+      const data = await api("/api/delete-group", { method: "POST", body: { group } });
+      toast(data.message, "success");
+      openGroups.delete(group);
       await refreshSources();
     } catch (err) {
       toast(err.message, "error");
@@ -1052,9 +1094,9 @@
       $("#link-input").focus();
       return;
     }
-    if (e.altKey && ["1", "2", "3"].includes(e.key)) {
+    if (e.altKey && /^[1-9]$/.test(e.key) && VIEWS()[+e.key - 1]) {
       e.preventDefault();
-      showView(["chat", "tools", "insights"][+e.key - 1]);
+      showView(VIEWS()[+e.key - 1]);
       return;
     }
     if (typing(e.target) || e.ctrlKey || e.metaKey || e.altKey || shortcuts.open) return;
@@ -1068,7 +1110,13 @@
   });
 
   /* ─── Boot ────────────────────────────────────────────────────────────── */
-  window.KF = { renderMarkdown, escapeHtml }; // exposed for debugging/tests
+  /* Shared helpers for the feature scripts (crawl.js, search.js, create.js, graph.js). */
+  window.KF = {
+    $, $$, el, icon, api, toast, escapeHtml, renderMarkdown, setLoading, download, slug, copyText, displayName,
+    showView, renderMermaid, exportPng, refreshSources, state, typing,
+    onSources: (fn) => sourceListeners.push(fn),
+    askAbout: (text) => { showView("chat"); sendMessage(text); },
+  };
   renderChat();
   refreshSources();
 })();
