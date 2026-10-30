@@ -106,6 +106,9 @@ All settings come from environment variables. `.env.example` lists them all.
 | `SUMMARY_MAX_CHARS` / `ENTITY_MAX_CHARS` | `24000` / `6000` | Context budget, sampled evenly across sources |
 | `CLUSTER_MIN_CHUNKS` / `CLUSTER_MAX_TOPICS` | `5` / `5` | Topic map |
 | `CRAWL_TIMEOUT_SECONDS` / `CRAWL_MAX_BYTES` / `CRAWL_MAX_REDIRECTS` | `15` / `5242880` / `5` | Every redirect hop and the connected IP are re-checked |
+| `RENDER_JS` | `never` | `auto` renders a page in headless Chromium when the static HTML has little text or is a SPA shell; `always` renders every page. See [JavaScript rendering](#javascript-rendering) |
+| `RENDER_JS_TIMEOUT_SECONDS` / `RENDER_JS_MAX_CONCURRENCY` / `RENDER_JS_MAX_REQUESTS` | `20` / `2` / `150` | Per page deadline, simultaneous browser pages, subrequests per page |
+| `RENDER_JS_SETTLE_MS` / `RENDER_JS_MIN_CHARS` / `RENDER_JS_BROWSER_PATH` | `1500` / `500` / – | Wait for network idle; `auto` threshold; optional Chromium/Chrome binary |
 | `CRAWL_USER_AGENT` | `KnowledgeForge/2 (+repo URL)` | |
 | `YOUTUBE_LANGUAGES` | `en,en-US,en-GB` | Transcript language preference |
 | `YOUTUBE_METADATA_FALLBACK` | `false` | When a video has no transcript, ask Gemini to describe it (may be inaccurate) |
@@ -118,6 +121,23 @@ All settings come from environment variables. `.env.example` lists them all.
 | `GUNICORN_WORKERS` / `GUNICORN_THREADS` / `GUNICORN_TIMEOUT` | `1` (`2` with Qdrant) / `8` / `180` | More than one worker requires `VECTOR_STORE=qdrant` |
 | `GUNICORN_GRACEFUL_TIMEOUT` / `GUNICORN_KEEPALIVE` | `30` / `5` | |
 
+## JavaScript rendering
+
+Single-page apps and lazy-loaded pages can be crawled through a headless Chromium. It is optional and off by default.
+
+```bash
+pip install -r requirements-js.txt          # or: pip install ".[js]"
+playwright install --with-deps chromium
+RENDER_JS=auto python app.py
+```
+
+- With `RENDER_JS=auto` the crawler fetches the static HTML first and renders only when it has little text (`RENDER_JS_MIN_CHARS`) or looks like an app shell; it keeps whichever text is longer.
+- The **Render JavaScript** checkbox in the Link panel turns rendering on or off per URL. It is disabled when the server has `RENDER_JS=never` or the browser is not installed.
+- Chromium never touches the network directly. Every request, including redirects, goes through the same SSRF-guarded client as the static crawler, so navigations and subrequests to private or loopback addresses are blocked. Images, media, fonts, WebSockets and service workers are blocked too.
+- Pages are capped by `RENDER_JS_TIMEOUT_SECONDS`, `RENDER_JS_MAX_REQUESTS`, `CRAWL_MAX_BYTES` and `RENDER_JS_MAX_CONCURRENCY`.
+- If Playwright or Chromium is missing, the request fails with an error that says how to install them, and `auto` falls back to the static text when there is enough of it.
+- Docker: `docker build --build-arg INSTALL_JS=true -f dockerfile .` bakes Chromium into the image (about 400 MB larger). The default image does not include it.
+
 ## Tests and lint
 
 ```bash
@@ -127,7 +147,7 @@ pytest -q                 # offline: Gemini and the network are mocked
 pytest -m network         # optional live checks (needs internet)
 ```
 
-CI (`.github/workflows/ci.yml`) runs ruff and then pytest on Python 3.10, 3.11 and 3.12, and finally a Docker build.
+CI (`.github/workflows/ci.yml`) runs ruff and then pytest on Python 3.10, 3.11 and 3.12, a JavaScript-rendering job with real Chromium, and finally a Docker build.
 
 ## Limitations
 
@@ -135,7 +155,7 @@ CI (`.github/workflows/ci.yml`) runs ruff and then pytest on Python 3.10, 3.11 a
 - The `local` store keeps everything in one process, so use `qdrant` (plus `REDIS_URL`) when running several gunicorn workers.
 - There is no authentication or multi-tenancy. Every visitor shares one knowledge base.
 - YouTube ingestion depends on public transcripts, and some videos have none or are blocked by region or bot checks.
-- Crawling takes static HTML only, so JavaScript-rendered pages may yield little text.
+- JavaScript rendering is opt-in (`RENDER_JS`) and needs Playwright plus Chromium; without it, JavaScript-rendered pages may yield little text.
 - Retrieval quality has not been formally benchmarked.
 - The rate limiter is in memory, so the limit applies per worker process.
 
