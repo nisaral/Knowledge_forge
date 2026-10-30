@@ -223,7 +223,12 @@
     const input = $("#link-input");
     const url = input.value.trim();
     if (!url) return;
-    const ok = await addSource({ source: url, source_type: isYouTube(url) ? "youtube" : "web" }, e.submitter || $("#form-link button"));
+    const yt = isYouTube(url);
+    const payload = { source: url, source_type: yt ? "youtube" : "web" };
+    if (!yt && state.renderJs?.available) {
+      payload.render_js = $("#render-js").checked ? (state.renderJs.mode === "always" ? "always" : "auto") : "never";
+    }
+    const ok = await addSource(payload, e.submitter || $("#form-link button"));
     if (ok) input.value = "";
   });
 
@@ -327,6 +332,20 @@
   }
   $("#scope-clear").addEventListener("click", () => setScope(null));
 
+  function applyRenderJs(info) {
+    const box = $("#render-js");
+    const wrap = $("#render-js-wrap");
+    const first = state.renderJs === undefined;
+    state.renderJs = info || { mode: "never", available: false };
+    box.disabled = !state.renderJs.available;
+    if (first) box.checked = state.renderJs.available;
+    wrap.classList.toggle("disabled", box.disabled);
+    wrap.title = box.disabled
+      ? (state.renderJs.mode === "never" ? "JavaScript rendering is disabled on this server (RENDER_JS=never)"
+        : "Playwright/Chromium is not installed on the server")
+      : (state.renderJs.mode === "always" ? "Pages are always rendered in a headless browser" : "Render only when the static page looks empty");
+  }
+
   async function refreshSources() {
     try {
       const data = await api("/api/get-sources");
@@ -335,6 +354,7 @@
       const chunks = data.stats?.chunks ?? state.sources.reduce((a, s) => a + s.chunks, 0);
       $("#kb-stats").textContent = `${chunks} chunk${chunks === 1 ? "" : "s"} · ${data.stats?.backend || "local"} store`;
       $("#key-banner").hidden = data.gemini_configured !== false;
+      applyRenderJs(data.render_js);
       renderSources();
       renderSuggestions();
     } catch (err) {

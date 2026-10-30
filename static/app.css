@@ -337,3 +337,6 @@ input.invalid{border-color:var(--err);box-shadow:0 0 0 3px var(--err-soft)}
   #shortcuts-btn{display:none}
 }
 @media (prefers-reduced-motion:reduce){.md.streaming>:last-child::after{animation:none}.source-skel{animation:none}}
+.check{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;user-select:none}
+.check input{width:16px;height:16px;accent-color:var(--accent,#4f46e5);margin:0}
+.check.disabled{opacity:.55;cursor:not-allowed}

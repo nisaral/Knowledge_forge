@@ -68,6 +68,11 @@
         <label class="sr-only" for="link-input">Web page or YouTube URL</label>
         <input id="link-input" type="url" placeholder="https://… web page or YouTube link" required autocomplete="off">
         <p class="hint">YouTube links are detected automatically and their transcript is used.</p>
+        <label class="check" id="render-js-wrap" title="JavaScript rendering is disabled on this server (RENDER_JS=never)">
+          <input type="checkbox" id="render-js" disabled aria-describedby="render-js-hint">
+          <span>Render JavaScript</span>
+        </label>
+        <p class="hint" id="render-js-hint">For single-page apps and lazy-loaded pages. Uses a sandboxed headless browser; slower.</p>
         <button class="btn primary block" type="submit"><svg><use href="#i-plus"/></svg>Add link</button>
       </form>
 
