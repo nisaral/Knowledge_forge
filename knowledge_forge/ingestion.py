@@ -9,13 +9,14 @@ import re
 import socket
 import tempfile
 import time
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import google.generativeai as genai
 import requests
 from bs4 import BeautifulSoup
 
 from knowledge_forge.config import get_settings
+from knowledge_forge.errors import IngestionError
 from knowledge_forge.llm import ensure_gemini_configured
 
 logger = logging.getLogger(__name__)
@@ -74,16 +75,27 @@ def crawl_url(url: str) -> str | None:
         logger.info("YouTube URL passed to web crawler — use transcript API instead: %s", url)
         return None
     try:
-        r = requests.get(
-            url,
-            headers={
-                "User-Agent": _BROWSER_UA,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-            timeout=get_settings().crawl_timeout_seconds,
-            allow_redirects=True,
-        )
+        r = None
+        for _hop in range(5):  # follow redirects manually so every hop is SSRF-checked
+            r = requests.get(
+                url,
+                headers={
+                    "User-Agent": _BROWSER_UA,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+                timeout=get_settings().crawl_timeout_seconds,
+                allow_redirects=False,
+            )
+            location = r.headers.get("location") if 300 <= r.status_code < 400 else None
+            if not location:
+                break
+            url = urljoin(url, location)
+            if validate_public_url(url):
+                logger.warning("Blocked redirect to a non-public URL: %s", url)
+                return None
+        else:
+            return None
         r.raise_for_status()
         soup = BeautifulSoup(r.content, "html.parser")
         for el in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
@@ -289,20 +301,21 @@ def ingest_text_source(source: str, source_type: str) -> tuple[str | None, str, 
 
 def ingest_pdf_bytes(data: bytes) -> str | None:
     try:
-        import fitz  # PyMuPDF
-        doc = fitz.open(stream=data, filetype="pdf")
-        if doc.needs_pass:
-            logger.warning("PDF is password protected.")
-            return None
-        texts = [page.get_text("text") for page in doc]
-        doc.close()
+        import pymupdf
+    except ImportError:
+        return ingest_pdf_via_gemini_bytes(data)
+    try:
+        with pymupdf.open(stream=data, filetype="pdf") as doc:
+            if doc.needs_pass:
+                raise IngestionError("This PDF is password protected. Remove the password and try again.")
+            texts = [page.get_text("text") for page in doc]
         raw = "\n".join(texts).strip()
         # Very little text usually means a scanned PDF: fall back to Gemini OCR.
         if len(raw) < 100:
             return ingest_pdf_via_gemini_bytes(data)
         return raw
-    except ImportError:
-        return ingest_pdf_via_gemini_bytes(data)
+    except IngestionError:
+        raise
     except Exception as exc:
         logger.error("PDF extraction error: %s", exc)
         return ingest_pdf_via_gemini_bytes(data)
