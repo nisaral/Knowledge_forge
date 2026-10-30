@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import tempfile
+import threading
+import time
 from typing import Any
 
 import faiss
@@ -30,6 +32,8 @@ class LocalFaissStore(VectorStore):
         self.index_file = settings.index_file
         self.ivf_threshold = settings.faiss_ivf_threshold
         self.ivf_nlist = settings.faiss_ivf_nlist
+        self.nprobe = settings.faiss_nprobe
+        self._lock = threading.RLock()
         self.chunks: list[dict] = []
         self.index: faiss.Index = self._new_flat_index()
         self._use_ivf = False
@@ -59,7 +63,7 @@ class LocalFaissStore(VectorStore):
             index = faiss.IndexIVFFlat(quantizer, self.dim, nlist, faiss.METRIC_INNER_PRODUCT)
             index.train(vectors)
             index.add(vectors)
-            index.nprobe = min(16, nlist)
+            index.nprobe = min(self.nprobe, nlist)
             index.make_direct_map()
             self.index = index
             self._use_ivf = True
@@ -71,7 +75,11 @@ class LocalFaissStore(VectorStore):
 
     # ─── Persistence ────────────────────────────────────────────────────────
     def load(self) -> None:
-        if not (os.path.exists(self.kb_file) and os.path.exists(self.index_file)):
+        has_kb, has_index = os.path.exists(self.kb_file), os.path.exists(self.index_file)
+        if not (has_kb or has_index):
+            return
+        if has_kb != has_index:
+            self._quarantine("only one of the two knowledge-base files exists")
             return
         try:
             with open(self.kb_file, encoding="utf-8") as f:
@@ -86,12 +94,22 @@ class LocalFaissStore(VectorStore):
             self._use_ivf = isinstance(index, faiss.IndexIVFFlat)
             if self._use_ivf:
                 self.index.make_direct_map()
+                self.index.nprobe = min(self.nprobe, self.index.nlist)
             logger.info("Loaded %d local chunks from %s.", len(self.chunks), self.kb_file)
         except Exception as exc:
-            logger.warning("Could not load local knowledge base (%s). Starting fresh.", exc)
-            self.chunks = []
-            self.index = self._new_flat_index()
-            self._use_ivf = False
+            self._quarantine(str(exc))
+
+    def _quarantine(self, reason: str) -> None:
+        """Move unreadable files aside (instead of overwriting them on the next save)."""
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        for path in (self.kb_file, self.index_file):
+            if os.path.exists(path):
+                backup = f"{path}.corrupt-{stamp}"
+                os.replace(path, backup)
+                logger.error("Local knowledge base unreadable (%s); moved %s to %s", reason, path, backup)
+        self.chunks = []
+        self.index = self._new_flat_index()
+        self._use_ivf = False
 
     @staticmethod
     def _atomic_write(path: str, writer) -> None:
@@ -174,7 +192,18 @@ class LocalFaissStore(VectorStore):
         return list(zip(self.chunks, vecs))
 
     def delete_source(self, source: str) -> int:
-        keep = [i for i, c in enumerate(self.chunks) if c.get("source") != source]
+        if not source:
+            return 0
+        return self._delete_where(lambda c: c.get("source") == source)
+
+    def delete_ids(self, ids: list[str]) -> int:
+        wanted = set(ids)
+        if not wanted:
+            return 0
+        return self._delete_where(lambda c: c.get("id") in wanted)
+
+    def _delete_where(self, predicate) -> int:
+        keep = [i for i, c in enumerate(self.chunks) if not predicate(c)]
         removed = len(self.chunks) - len(keep)
         if not removed:
             return 0

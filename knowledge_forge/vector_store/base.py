@@ -34,6 +34,10 @@ class VectorStore(ABC):
         """Delete every chunk of ``source``; return the number removed."""
 
     @abstractmethod
+    def delete_ids(self, ids: list[str]) -> int:
+        """Delete chunks by id; return the number removed."""
+
+    @abstractmethod
     def count(self) -> int:
         """Number of stored vectors."""
 

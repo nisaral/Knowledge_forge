@@ -74,15 +74,15 @@ def test_kb_rerank_reorders_and_survives_failure(kb, monkeypatch):
     config.get_settings.cache_clear()
     kb.add_chunks(["apple pie recipe", "apple tree growth", "apple stock price"], "s", "text")
 
-    def pick_stock(prompt):
+    def pick_stock(prompt, **_k):
         # Candidate order depends on score ties, so find the passage number by its text.
-        n = re.search(r"\[(\d+)\] apple stock price", prompt).group(1)
+        n = re.search(r'<passage n="(\d+)">\napple stock price', prompt).group(1)
         return f"[{n}]"
 
     monkeypatch.setattr(knowledge_base, "generate_content", pick_stock)
     assert kb.hybrid_search("apple")[0]["text"] == "apple stock price"
 
-    def boom(_p):
+    def boom(_p, **_k):
         raise RuntimeError("model down")
 
     monkeypatch.setattr(knowledge_base, "generate_content", boom)

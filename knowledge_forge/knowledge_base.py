@@ -9,7 +9,7 @@ import uuid
 import numpy as np
 from rank_bm25 import BM25Okapi
 
-from knowledge_forge.cache import bump_kb_version, get_kb_version, reset_kb_version
+from knowledge_forge.cache import bump_kb_version, get_kb_version
 from knowledge_forge.chunking import content_hash
 from knowledge_forge.config import get_settings
 from knowledge_forge.embeddings import gemini_embed, gemini_embed_query
@@ -97,8 +97,13 @@ class KnowledgeBase:
     def stats(self) -> dict:
         with self._lock:
             stats = self._store.stats()
+            stats["sources"] = len({c["source"] for c in self._all_chunks()})
             stats["cache_version"] = get_kb_version()
             return stats
+
+    def source_exists(self, source: str) -> bool:
+        with self._lock:
+            return any(c["source"] == source for c in self._all_chunks())
 
     def health_check(self) -> bool:
         return self._store.health_check()
@@ -111,45 +116,69 @@ class KnowledgeBase:
         source_type: str,
         metadata: dict | None = None,
     ) -> int:
-        """Embed and store ``chunks``. Returns how many new chunks were stored.
+        """Embed and store chunks that are new for ``source``; returns how many were stored."""
+        return self.sync_source(chunks, source, source_type, metadata, replace=False)[0]
 
-        Chunks whose content hash already exists for the same source are skipped, so
-        re-adding a document does not re-embed (or duplicate) it.
+    def sync_source(
+        self,
+        chunks: list[str],
+        source: str,
+        source_type: str,
+        metadata: dict | None = None,
+        replace: bool = True,
+    ) -> tuple[int, int]:
+        """Store ``chunks`` for ``source``; returns ``(added, removed)``.
+
+        Chunks whose content hash already exists for the source are not re-embedded. With
+        ``replace=True`` (re-ingesting a changed page/file), chunks of the source that are no
+        longer present are deleted *after* the new ones are stored, so the source is never
+        briefly empty. The duplicate check is repeated under the write lock, so concurrent
+        adds of the same content cannot store it twice.
         """
-        if not chunks:
-            return 0
+        if not source:
+            raise ValueError("source must be non-empty")
+        wanted: dict[str, str] = {}
+        for chunk in chunks:
+            wanted.setdefault(content_hash(chunk), chunk)
         with self._lock:
             existing = {c.get("hash") for c in self._all_chunks() if c["source"] == source}
-        seen: set[str] = set()
-        fresh: list[tuple[str, str]] = []
-        for chunk in chunks:
-            h = content_hash(chunk)
-            if h in existing or h in seen:
-                continue
-            seen.add(h)
-            fresh.append((chunk, h))
-        if not fresh:
-            return 0
+        fresh = [(h, c) for h, c in wanted.items() if h not in existing]
 
         # Network-bound embedding happens outside the lock so reads are not blocked.
-        vectors = gemini_embed([c for c, _ in fresh])
-        records = [
-            {
-                "id": str(uuid.uuid4()),
-                "text": chunk,
-                "hash": h,
-                "source": source,
-                "source_type": source_type,
-                "metadata": metadata or {},
-            }
-            for chunk, h in fresh
-        ]
+        vectors = gemini_embed([c for _, c in fresh]) if fresh else None
+
         with self._lock:
-            self._store.upsert_chunks(records, vectors)
-            self._invalidate()
-        return len(records)
+            current = [c for c in self._all_chunks() if c["source"] == source]
+            existing = {c.get("hash") for c in current}
+            keep_rows = [i for i, (h, _) in enumerate(fresh) if h not in existing]
+            records = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "text": fresh[i][1],
+                    "hash": fresh[i][0],
+                    "source": source,
+                    "source_type": source_type,
+                    "metadata": metadata or {},
+                }
+                for i in keep_rows
+            ]
+            changed = False
+            if records:
+                self._store.upsert_chunks(records, np.asarray(vectors)[keep_rows])
+                changed = True
+            removed = 0
+            if replace:
+                stale = [c["id"] for c in current if c.get("hash") not in wanted]
+                if stale:
+                    removed = self._store.delete_ids(stale)
+                    changed = True
+            if changed:
+                self._invalidate()
+            return len(records), removed
 
     def delete_source(self, source: str) -> int:
+        if not source:
+            return 0
         with self._lock:
             removed = self._store.delete_source(source)
             if removed:
@@ -159,7 +188,7 @@ class KnowledgeBase:
     def clear(self) -> None:
         with self._lock:
             self._store.clear()
-            reset_kb_version()
+            # Only ever bump: resetting to 0 could collide with a version other workers cached.
             self._invalidate()
             logger.info("Knowledge base cleared.")
 
@@ -189,7 +218,7 @@ class KnowledgeBase:
         candidates = [
             {**{key: v for key, v in by_id[cid].items() if key != "score"}, "score": round(score, 4)}
             for cid, score in ranked[: settings.top_k_coarse]
-            if cid in by_id
+            if cid in by_id and score >= settings.min_relevance
         ]
 
         if settings.rerank and len(candidates) > k:
@@ -205,7 +234,7 @@ class KnowledgeBase:
                     reranked += [c for c in candidates if c not in reranked][: k - len(reranked)]
                     candidates = reranked
             except Exception as exc:  # re-ranking is best effort
-                logger.warning("Re-rank failed, using fused ranking: %s", exc)
+                logger.warning("Re-rank failed, using fused ranking: %s", type(exc).__name__)
         return candidates[:k]
 
     def get_embeddings_for_clustering(self) -> tuple[list[dict], np.ndarray]:
