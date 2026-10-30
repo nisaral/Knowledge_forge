@@ -36,12 +36,11 @@ services:
       - "8000:8000"
     environment:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      FLASK_SECRET: ${FLASK_SECRET:-change-me-in-production}
+      FLASK_SECRET: ${FLASK_SECRET:?Set FLASK_SECRET in .env}
       VECTOR_STORE: qdrant
       QDRANT_URL: http://qdrant:6333
       QDRANT_COLLECTION: knowledge_forge
       REDIS_URL: redis://redis:6379/0
-      SESSION_TYPE: redis
       GUNICORN_WORKERS: "2"
       GUNICORN_THREADS: "8"
       LOG_LEVEL: info

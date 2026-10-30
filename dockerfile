@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y \
-    libmupdf-dev \
-    mupdf-tools \
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -11,17 +11,19 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY app.py gunicorn.conf.py pyproject.toml ./
+COPY knowledge_forge ./knowledge_forge
+COPY templates ./templates
+COPY static ./static
 
-RUN rm -f knowledge_base.json faiss_index.bin .env \
-    && mkdir -p /app/data
+RUN mkdir -p /app/data && useradd --create-home appuser && chown -R appuser /app
+USER appuser
 
 ENV DATA_DIR=/app/data
 ENV PORT=8000
 ENV VECTOR_STORE=qdrant
 ENV QDRANT_URL=http://qdrant:6333
 ENV REDIS_URL=redis://redis:6379/0
-ENV SESSION_TYPE=redis
 
 EXPOSE 8000
 

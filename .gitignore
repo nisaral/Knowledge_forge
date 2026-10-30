@@ -13,12 +13,17 @@ build/
 
 # Environment & Secrets — NEVER COMMIT
 .env
+.env*
 *.env
 *.env.*
+!.env.example
 
 # Knowledge Base Data (local session data — not for repo)
 knowledge_base.json
 faiss_index.bin
+data/
+terminals/
+.ruff_cache/
 
 # IDE
 .vscode/
