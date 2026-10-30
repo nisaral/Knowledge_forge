@@ -15,13 +15,16 @@ from collections import defaultdict, deque
 import numpy as np
 from flask import Flask, Response, g, jsonify, render_template, request, stream_with_context
 
-from knowledge_forge import __version__, js_render
+from knowledge_forge import __version__, js_render, studio
+from knowledge_forge import create as create_mod
+from knowledge_forge import graph as graph_mod
 from knowledge_forge.cache import redis_health_check
 from knowledge_forge.chunking import content_hash, normalize_text
 from knowledge_forge.config import flask_secret, get_settings
 from knowledge_forge.crawler import get_crawl_manager, store_text
 from knowledge_forge.errors import (
     MISSING_KEY_MESSAGE,
+    EmptyKnowledgeBase,
     IngestionError,
     KnowledgeForgeError,
     LLMError,
@@ -302,6 +305,33 @@ def _opt_bool(data: dict, key: str, default: bool) -> bool:
     if not isinstance(value, bool):
         raise ValidationError(f"'{key}' must be true or false.")
     return value
+
+
+def _str_list(data: dict, key: str, limit: int = 200) -> list[str] | None:
+    value = data.get(key)
+    if value in (None, "", []):
+        return None
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list) or not all(isinstance(v, str) and 0 < len(v) <= 2000 for v in value):
+        raise ValidationError(f"'{key}' must be a list of strings.")
+    return value[:limit]
+
+
+def _studio_scope(kb: KnowledgeBase, data: dict) -> set[str] | None:
+    """Scope from ``sources``/``groups`` (lists) or the legacy single ``source`` focus."""
+    sources = _str_list(data, "sources") or []
+    single = _opt_str(data, "source", get_settings().source_name_max_chars)
+    if single:
+        if not kb.source_exists(single):
+            raise NotFoundError("That source is no longer in your knowledge base. Pick another or clear the focus.")
+        sources.append(single)
+    return studio.scope_sources(kb, sources or None, _str_list(data, "groups"))
+
+
+def _need_content(kb: KnowledgeBase):
+    if kb.count() == 0:
+        raise EmptyKnowledgeBase()
 
 
 def _sse(event: str, data) -> str:
@@ -730,6 +760,200 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
             if isinstance(items, list)
         }
         return jsonify({"success": True, "entities": clean})
+
+    # ── Create hub: storyboard + flashcards ───────────────────────────────
+    @app.route("/api/storyboard", methods=["POST"])
+    @api_endpoint(limited=True)
+    def storyboard():
+        data = _json_body()
+        k = get_kb()
+        topic = _opt_str(data, "topic", get_settings().tool_topic_max_chars)
+        scope = _studio_scope(k, data)
+        frames = _opt_int(data, "frames", 6, 2, 16)
+        style = _opt_str(data, "style", 80) or "clear and friendly"
+        _need_content(k)
+        ensure_gemini_configured()
+        result = create_mod.generate_storyboard(k, topic=topic, sources=scope, frames=frames, style=style)
+        if not result or not result["frames"]:
+            return _error("No relevant content found for this storyboard. Try another topic or add sources.", 404)
+        return jsonify({"success": True, **result})
+
+    @app.route("/api/storyboard/frame", methods=["POST"])
+    @api_endpoint(limited=True)
+    def storyboard_frame():
+        data = _json_body()
+        k = get_kb()
+        frames = data.get("frames")
+        if not isinstance(frames, list) or not 1 <= len(frames) <= 30 or not all(isinstance(f, dict) for f in frames):
+            raise ValidationError("'frames' must be the storyboard's list of frames.")
+        frames = [{"title": studio.text_field(f.get("title"), 120)} for f in frames]
+        index = _opt_int(data, "index", 0, 0, len(frames) - 1)
+        topic = _opt_str(data, "topic", get_settings().tool_topic_max_chars)
+        instruction = _opt_str(data, "instruction", 300)
+        scope = _studio_scope(k, data)
+        _need_content(k)
+        ensure_gemini_configured()
+        result = create_mod.regenerate_frame(k, frames=frames, index=index, topic=topic, instruction=instruction,
+                                             sources=scope)
+        if not result:
+            return _error("No relevant content found for this frame.", 404)
+        return jsonify({"success": True, "index": index, **result})
+
+    @app.route("/api/flashcards", methods=["POST"])
+    @api_endpoint(limited=True)
+    def flashcards():
+        data = _json_body()
+        k = get_kb()
+        topic = _opt_str(data, "topic", get_settings().tool_topic_max_chars)
+        count = _opt_int(data, "count", 10, 1, 50)
+        difficulty = _opt_str(data, "difficulty", 10) or "mixed"
+        if difficulty not in create_mod.DIFFICULTIES:
+            raise ValidationError(f"Difficulty must be one of: {', '.join(create_mod.DIFFICULTIES)}.")
+        scope = _studio_scope(k, data)
+        _need_content(k)
+        ensure_gemini_configured()
+        result = create_mod.generate_flashcards(k, topic=topic, sources=scope, count=count, difficulty=difficulty)
+        if not result or not result["cards"]:
+            return _error("Could not make flashcards from this content. Try another topic or add sources.", 404)
+        return jsonify({"success": True, **result})
+
+    # ── Knowledge graph and friends ───────────────────────────────────────
+    def _graph_from(data):
+        k = get_kb()
+        scope = _studio_scope(k, data)
+        topic = _opt_str(data, "topic", get_settings().tool_topic_max_chars)
+        max_nodes = _opt_int(data, "max_nodes", 80, 5, graph_mod.MAX_NODES)
+        _need_content(k)
+        ensure_gemini_configured()
+        g_ = graph_mod.build_graph(k, sources=scope, topic=topic, max_nodes=max_nodes,
+                                   use_cache=not _opt_bool(data, "refresh", False))
+        if not g_ or not g_["nodes"]:
+            raise NotFoundError("No entities found in this content.")
+        return k, scope, g_
+
+    @app.route("/api/graph", methods=["POST"])
+    @api_endpoint(limited=True)
+    def graph():
+        data = _json_body()
+        _, _, g_ = _graph_from(data)
+        payload = {"success": True, **g_}
+        if _opt_bool(data, "include_map", False):
+            payload["mermaid_code"] = graph_mod.concept_map(g_)
+        return jsonify(payload)
+
+    @app.route("/api/glossary", methods=["POST"])
+    @api_endpoint(limited=True)
+    def glossary():
+        _, _, g_ = _graph_from(_json_body())
+        return jsonify({"success": True, "terms": graph_mod.glossary(g_), "fallback": g_["fallback"]})
+
+    @app.route("/api/concept-map", methods=["POST"])
+    @api_endpoint(limited=True)
+    def concept_map():
+        _, _, g_ = _graph_from(_json_body())
+        return jsonify({"success": True, "mermaid_code": graph_mod.concept_map(g_), "fallback": g_["fallback"]})
+
+    @app.route("/api/timeline", methods=["POST"])
+    @api_endpoint(limited=True)
+    def timeline():
+        k = get_kb()
+        scope = _studio_scope(k, _json_body())
+        _need_content(k)
+        return jsonify({"success": True, "events": graph_mod.timeline(k, scope)})
+
+    @app.route("/api/connect", methods=["POST"])
+    @api_endpoint(limited=True)
+    def connect():
+        data = _json_body()
+        a = _required_str(data, "a", "First concept", 120)
+        b = _required_str(data, "b", "Second concept", 120)
+        _, _, g_ = _graph_from(data)
+        na, nb, paths = graph_mod.find_paths(g_, a, b)
+        if not na or not nb:
+            missing = a if not na else b
+            return _error(f"'{missing}' is not in the knowledge graph. Pick a node from the graph.", 404)
+        names = {n["id"]: n["name"] for n in g_["nodes"]}
+        out = [{"nodes": p["nodes"], "names": [names[i] for i in p["nodes"]],
+                "edges": [{k_: e[k_] for k_ in ("source", "target", "label", "sources")} for e in p["edges"]],
+                "text": graph_mod.describe_path(g_, p)} for p in paths]
+        fallback = True
+        if out:
+            facts = "\n".join(f"Path {i + 1}: {p['text']}" for i, p in enumerate(out))
+            evidence = "\n".join(f"- {s['source']}: {s['snippet']}" for p in out[:1] for e in p["edges"]
+                                  for s in e["sources"][:1])
+            explanation = studio.llm_text(
+                f"Explain in 2-4 sentences how '{na['name']}' connects to '{nb['name']}', using only these "
+                f"graph paths and evidence. Do not invent facts.\n\n{facts}\n\nEvidence:\n{evidence}")
+            fallback = explanation is None
+            if not explanation:
+                explanation = f"{na['name']} connects to {nb['name']} through: {out[0]['text']}"
+                fallback = True
+        else:
+            explanation = f"No connection between {na['name']} and {nb['name']} was found in the graph."
+        return jsonify({"success": True, "from": na["name"], "to": nb["name"], "paths": out,
+                        "explanation": explanation, "fallback": fallback})
+
+    @app.route("/api/related-sources", methods=["POST"])
+    @api_endpoint(limited=True)
+    def related_sources():
+        data = _json_body()
+        k = get_kb()
+        source = _required_str(data, "source", "Source", get_settings().source_name_max_chars)
+        if not k.source_exists(source):
+            raise NotFoundError("That source is no longer in your knowledge base.")
+        return jsonify({"success": True, "source": source,
+                        "related": graph_mod.related_sources(k, source, _opt_int(data, "k", 5, 1, 20))})
+
+    @app.route("/api/overview", methods=["POST"])
+    @api_endpoint(limited=True)
+    def overview():
+        """Whole-KB summary plus a short summary and key topics per source."""
+        data = _json_body()
+        k = get_kb()
+        scope = _studio_scope(k, data)
+        _need_content(k)
+        ensure_gemini_configured()
+        chunks = [c for c in k.list_chunks() if scope is None or c["source"] in scope]
+        all_texts = [c["text"] for c in k.list_chunks()]
+        by_src: dict[str, list[dict]] = defaultdict(list)
+        for c in chunks:
+            by_src[c["source"]].append(c)
+        per_source = [{"source": s, "chunks": len(cs), "key_topics": graph_mod.keywords([c["text"] for c in cs],
+                                                                                         all_texts, 8)}
+                      for s, cs in list(by_src.items())[:40]]
+        summarize_each = _opt_bool(data, "per_source_summaries", True)
+        fallback = False
+        prompt = ("Summarise each numbered source in one or two sentences, then the whole collection in one "
+                  'paragraph. Return ONLY JSON: {"sources": [{"n": int, "summary": str}], "overall": str, '
+                  '"key_topics": [up to 8 short topics]}.\n\n')
+        budget = max(1500, get_settings().summary_max_chars // max(1, len(per_source)))
+        prompt += "\n\n".join(f'<source n="{i + 1}">\n{_balanced_text(by_src[p["source"]], budget)}\n</source>'
+                               for i, p in enumerate(per_source))
+
+        def validate(d):
+            if not isinstance(d, dict) or not isinstance(d.get("overall"), str):
+                return None
+            return d
+
+        got = studio.llm_json(prompt, validate, '{"sources": [{"n": int, "summary": str}], "overall": str, '
+                                                '"key_topics": [str]}') if summarize_each else None
+        if got:
+            sums = {s.get("n"): studio.text_field(s.get("summary"), 600) for s in got.get("sources") or []
+                    if isinstance(s, dict)}
+            for i, p in enumerate(per_source):
+                p["summary"] = sums.get(i + 1, "")
+            overall = studio.text_field(got["overall"], 3000)
+            topics = [studio.text_field(t, 60) for t in got.get("key_topics") or [] if isinstance(t, str)][:8]
+        else:
+            fallback = True
+            for p in per_source:
+                first = studio.sentences(by_src[p["source"]][0]["text"])
+                p["summary"] = " ".join(first[:2])[:400]
+            overall = (f"{len(per_source)} source(s) covering: " + ", ".join(graph_mod.keywords(
+                [c["text"] for c in chunks], all_texts, 10)) + ".")
+            topics = graph_mod.keywords([c["text"] for c in chunks], all_texts, 8)
+        return jsonify({"success": True, "overall": overall, "key_topics": topics, "sources": per_source,
+                        "fallback": fallback})
 
     @app.route("/api/cluster-topics", methods=["GET"])
     @api_endpoint(limited=True)

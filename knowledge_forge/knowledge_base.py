@@ -289,6 +289,14 @@ class KnowledgeBase:
         chunks, vectors = zip(*pairs)
         return list(chunks), np.asarray(vectors, dtype="float32")
 
+    def source_vectors(self) -> dict[str, np.ndarray]:
+        """Mean embedding per source (for related-source suggestions)."""
+        chunks, vectors = self.get_embeddings_for_clustering()
+        groups: dict[str, list[int]] = {}
+        for i, c in enumerate(chunks):
+            groups.setdefault(c["source"], []).append(i)
+        return {s: vectors[idx].mean(axis=0) for s, idx in groups.items()}
+
 
 _kb_singleton: KnowledgeBase | None = None
 _kb_lock = threading.Lock()

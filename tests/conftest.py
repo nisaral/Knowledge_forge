@@ -3,7 +3,7 @@ import hashlib
 import numpy as np
 import pytest
 
-from knowledge_forge import cache, config, embeddings, gemini, knowledge_base
+from knowledge_forge import cache, config, embeddings, gemini, graph, knowledge_base
 
 DIM = 16
 
@@ -38,6 +38,7 @@ def isolated_env(tmp_path, monkeypatch):
     embeddings.reset_embedding_state()
     knowledge_base.reset_knowledge_base()
     gemini.reset_client()
+    graph.reset_graph_cache()
 
     def _no_network_client():
         raise AssertionError("Test tried to reach Gemini; patch generate_content/gemini_embed instead.")
