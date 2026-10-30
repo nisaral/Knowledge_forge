@@ -11,6 +11,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Optional JavaScript rendering: docker build --build-arg INSTALL_JS=true ...
+ARG INSTALL_JS=false
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
+COPY requirements-js.txt .
+RUN if [ "$INSTALL_JS" = "true" ]; then \
+      pip install --no-cache-dir -r requirements-js.txt \
+      && playwright install --with-deps chromium \
+      && chmod -R a+rX /opt/ms-playwright \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY app.py gunicorn.conf.py pyproject.toml ./
 COPY knowledge_forge ./knowledge_forge
 COPY templates ./templates
