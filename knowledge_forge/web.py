@@ -66,6 +66,7 @@ from knowledge_forge.prompts import (
     summary_prompt,
     tool_prompt,
 )
+from knowledge_forge.search import search as search_kb
 
 logger = logging.getLogger("knowledgeforge")
 
@@ -552,6 +553,32 @@ def create_app(kb: KnowledgeBase | None = None) -> Flask:
             return _error("Group not found.", 404)
         return jsonify({"success": True, "removed": removed, "sources": sources,
                         "message": f"Removed {sources} pages ({removed} chunks)."})
+
+    # ── Search tab ─────────────────────────────────────────────────────────
+    @app.route("/api/search", methods=["POST"])
+    @api_endpoint(limited=True)
+    def search_api():
+        data = _json_body()
+        s = get_settings()
+        query = _required_str(data, "query", "Search query", s.max_question_chars)
+        filters = {}
+        for key in ("sources", "sites", "types", "groups"):
+            value = data.get(key)
+            if value in (None, "", []):
+                continue
+            if isinstance(value, str):
+                value = [value]
+            if not isinstance(value, list) or not all(isinstance(v, str) and len(v) <= 2000 for v in value):
+                raise ValidationError(f"'{key}' must be a list of strings.")
+            filters[key] = set(value[:200])
+        k = _opt_int(data, "k", 10, 1, 50)
+        per_page = _opt_int(data, "per_page", 3, 1, 10)
+        k_base = get_kb()
+        if k_base.count() == 0:
+            return _error("Knowledge base is empty. Add a web page, document or video first.", 422)
+        ensure_gemini_configured()
+        result = search_kb(k_base, query, k=k, per_page=per_page, **filters)
+        return jsonify({"success": True, **result})
 
     @app.route("/api/ask-question", methods=["POST"])
     @api_endpoint(limited=True)
