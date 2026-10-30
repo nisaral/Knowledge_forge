@@ -8,24 +8,25 @@ import os
 import re
 import socket
 import tempfile
+import threading
 import time
 from urllib.parse import urljoin, urlparse
 
-import google.generativeai as genai
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.connection import HTTPConnection, HTTPSConnection
+from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
+from knowledge_forge import gemini
 from knowledge_forge.config import get_settings
-from knowledge_forge.errors import IngestionError
-from knowledge_forge.llm import ensure_gemini_configured
+from knowledge_forge.errors import ConfigurationError, IngestionError, KnowledgeForgeError, RateLimitError
+from knowledge_forge.llm import ensure_gemini_configured, generate_content
 
 logger = logging.getLogger(__name__)
 
-_BROWSER_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-
+PRIVATE_URL_MESSAGE = "URLs pointing to local or private networks are not allowed."
+_BLOCKED_MARKER = "kf-blocked-non-public-address"
 
 _YT_HOST = re.compile(r"^(?:https?://)?(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be|youtube-nocookie\.com)/", re.I)
 
@@ -42,71 +43,209 @@ def normalize_url(url: str) -> str:
     return url
 
 
+def is_blocked_ip(raw: str) -> bool:
+    """True for any address that is not globally routable (private, loopback, link-local,
+    CGNAT, unspecified, reserved, multicast, ...), including IPv4-mapped IPv6 forms."""
+    try:
+        ip = ipaddress.ip_address(raw.split("%", 1)[0])
+    except ValueError:
+        return True
+    if ip.version == 6:
+        mapped = ip.ipv4_mapped or ip.sixtofour or (ip.teredo[1] if ip.teredo else None)
+        if mapped is not None and is_blocked_ip(str(mapped)):
+            return True
+    return not ip.is_global or ip.is_multicast
+
+
 def validate_public_url(url: str) -> str | None:
     """Return an error message if ``url`` is not a public http(s) URL, else None.
 
-    Blocks loopback/private/link-local targets to avoid server-side request forgery
-    unless ``ALLOW_PRIVATE_URLS=true``.
+    This is the friendly pre-check; :func:`_guarded_create_connection` re-checks the
+    address actually connected to, which closes the DNS-rebinding window.
     """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname
+        parsed.port  # noqa: B018 - raises ValueError for malformed ports
+    except ValueError:
+        return "That URL is malformed."
+    if parsed.scheme not in ("http", "https") or not host:
         return "Only http(s) URLs are supported."
+    if parsed.username or parsed.password:
+        return "URLs with embedded credentials are not supported."
     if get_settings().allow_private_urls:
         return None
-    host = parsed.hostname
-    if host.lower() in ("localhost", "localhost.localdomain") or host.endswith(".local"):
-        return "URLs pointing to local or private networks are not allowed."
+    if host.lower() in ("localhost", "localhost.localdomain") or host.lower().endswith((".local", ".internal")):
+        return PRIVATE_URL_MESSAGE
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return PRIVATE_URL_MESSAGE if is_blocked_ip(host) else None
     try:
         infos = socket.getaddrinfo(host, None)
-    except socket.gaierror:
-        return f"Could not resolve host '{host}'."
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
-            return "URLs pointing to local or private networks are not allowed."
+    except (socket.gaierror, UnicodeError):
+        return f"Could not resolve host '{host[:100]}'."
+    if not infos or any(is_blocked_ip(info[4][0]) for info in infos):
+        return PRIVATE_URL_MESSAGE
     return None
 
 
-def crawl_url(url: str) -> str | None:
+def _guarded_create_connection(address, timeout=None, source_address=None, socket_options=None):
+    """Like ``urllib3.util.connection.create_connection`` but refuses non-public peers."""
+    host, port = address
+    host = host.strip("[]")
+    allow_private = get_settings().allow_private_urls
+    last: OSError | None = None
+    for family, socktype, proto, _canon, sockaddr in socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM):
+        if not allow_private and is_blocked_ip(sockaddr[0]):
+            last = OSError(f"{_BLOCKED_MARKER}: {sockaddr[0]}")
+            continue
+        sock = None
+        try:
+            sock = socket.socket(family, socktype, proto)
+            for opt in socket_options or ():
+                sock.setsockopt(*opt)
+            if timeout is not None and timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:
+                sock.settimeout(timeout)
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(sockaddr)
+            return sock
+        except OSError as exc:
+            last = exc
+            if sock is not None:
+                sock.close()
+    raise last or OSError(f"getaddrinfo returned no addresses for {host}")
+
+
+class _GuardedHTTPConnection(HTTPConnection):
+    def _new_conn(self):
+        return _guarded_create_connection(
+            (self._dns_host, self.port), self.timeout, self.source_address, self.socket_options
+        )
+
+
+class _GuardedHTTPSConnection(HTTPSConnection):
+    def _new_conn(self):
+        return _guarded_create_connection(
+            (self._dns_host, self.port), self.timeout, self.source_address, self.socket_options
+        )
+
+
+class _GuardedHTTPPool(HTTPConnectionPool):
+    ConnectionCls = _GuardedHTTPConnection
+
+
+class _GuardedHTTPSPool(HTTPSConnectionPool):
+    ConnectionCls = _GuardedHTTPSConnection
+
+
+class _GuardedAdapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {"http": _GuardedHTTPPool, "https": _GuardedHTTPSPool}
+
+
+def _new_session() -> requests.Session:
+    session = requests.Session()
+    session.trust_env = False  # ignore *_PROXY env vars: a proxy would bypass the peer check
+    adapter = _GuardedAdapter()
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+_session_local = threading.local()
+
+
+def _http_get(url: str, **kwargs) -> requests.Response:
+    """GET through a per-thread session whose sockets refuse non-public peers."""
+    session = getattr(_session_local, "session", None)
+    if session is None:
+        session = _session_local.session = _new_session()
+    return session.get(url, **kwargs)
+
+
+_HTML_TYPES = ("text/html", "application/xhtml+xml", "text/plain", "application/xml", "text/xml")
+
+
+def _read_capped(resp, limit: int) -> bytes:
+    declared = resp.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > limit:
+        raise IngestionError(f"The page is larger than the {limit // 1024} KB crawl limit.")
+    buf = bytearray()
+    for chunk in resp.iter_content(64 * 1024):
+        buf.extend(chunk)
+        if len(buf) > limit:
+            raise IngestionError(f"The page is larger than the {limit // 1024} KB crawl limit.")
+    return bytes(buf)
+
+
+def crawl_url_detailed(url: str) -> tuple[str | None, str]:
+    """Fetch ``url`` and extract readable text. Returns ``(text, error_reason)``."""
+    settings = get_settings()
     url = normalize_url(url)
-    if validate_public_url(url):
-        return None
+    problem = validate_public_url(url)
+    if problem:
+        return None, problem
     if is_youtube_url(url):
-        logger.info("YouTube URL passed to web crawler — use transcript API instead: %s", url)
-        return None
+        return None, "That is a YouTube link; add it as a YouTube source."
+    headers = {
+        "User-Agent": settings.crawl_user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    resp = None
     try:
-        r = None
-        for _hop in range(5):  # follow redirects manually so every hop is SSRF-checked
-            r = requests.get(
-                url,
-                headers={
-                    "User-Agent": _BROWSER_UA,
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.9",
-                },
-                timeout=get_settings().crawl_timeout_seconds,
-                allow_redirects=False,
-            )
-            location = r.headers.get("location") if 300 <= r.status_code < 400 else None
+        for _hop in range(settings.crawl_max_redirects + 1):
+            resp = _http_get(url, headers=headers, timeout=settings.crawl_timeout_seconds,
+                             allow_redirects=False, stream=True)
+            location = resp.headers.get("location") if 300 <= resp.status_code < 400 else None
             if not location:
                 break
+            resp.close()
             url = urljoin(url, location)
-            if validate_public_url(url):
-                logger.warning("Blocked redirect to a non-public URL: %s", url)
-                return None
+            problem = validate_public_url(url)
+            if problem:
+                logger.warning("Blocked redirect to a non-public URL")
+                return None, problem
         else:
-            return None
-        r.raise_for_status()
-        soup = BeautifulSoup(r.content, "html.parser")
-        for el in soup(["script", "style", "nav", "footer", "header", "aside", "noscript"]):
+            return None, "The page redirected too many times."
+        if resp.status_code >= 400:
+            return None, f"The site responded with HTTP {resp.status_code}."
+        ctype = (resp.headers.get("content-type") or "text/html").split(";")[0].strip().lower()
+        if ctype not in _HTML_TYPES:
+            return None, f"Unsupported content type '{ctype[:60]}'. Upload files with the File tab."
+        body = _read_capped(resp, settings.crawl_max_bytes)
+    except IngestionError as exc:
+        return None, str(exc)
+    except requests.exceptions.Timeout:
+        return None, "The site took too long to respond."
+    except requests.exceptions.RequestException as exc:
+        if _BLOCKED_MARKER in repr(exc):
+            return None, PRIVATE_URL_MESSAGE
+        logger.warning("Error crawling URL: %s", type(exc).__name__)
+        return None, "Could not connect to the site."
+    finally:
+        if resp is not None:
+            resp.close()
+    if ctype == "text/plain":
+        text = body.decode(resp.encoding or "utf-8", errors="replace")
+    else:
+        soup = BeautifulSoup(body, "html.parser")
+        for el in soup(["script", "style", "nav", "footer", "header", "aside", "noscript", "form", "svg"]):
             el.decompose()
-        # Prefer article/main content when present
         main = soup.find("article") or soup.find("main") or soup.body
         text = " ".join((main or soup).stripped_strings)
-        return text if len(text.strip()) >= 50 else None
-    except Exception as exc:
-        logger.error("Error crawling %s: %s", url, exc)
-        return None
+    if len(text.strip()) < settings.crawl_min_chars:
+        return None, "Could not extract readable text (the page may need JavaScript). Paste it as Text instead."
+    return text, ""
+
+
+def crawl_url(url: str) -> str | None:
+    return crawl_url_detailed(url)[0]
 
 
 def _extract_youtube_id(video_url: str) -> str | None:
@@ -128,7 +267,7 @@ def _fetch_youtube_oembed(watch_url: str) -> str | None:
         r = requests.get(
             "https://www.youtube.com/oembed",
             params={"url": watch_url, "format": "json"},
-            headers={"User-Agent": _BROWSER_UA},
+            headers={"User-Agent": get_settings().crawl_user_agent},
             timeout=get_settings().crawl_timeout_seconds,
         )
         r.raise_for_status()
@@ -142,7 +281,7 @@ def _fetch_youtube_oembed(watch_url: str) -> str | None:
             parts.append(f"Channel: {author}")
         return "\n".join(parts)
     except Exception as exc:
-        logger.warning("YouTube oEmbed failed: %s", exc)
+        logger.warning("YouTube oEmbed failed: %s", type(exc).__name__)
         return None
 
 
@@ -151,18 +290,11 @@ def _youtube_gemini_fallback(video_url: str, page_text: str | None) -> str | Non
     if not page_text:
         return None
     try:
-        ensure_gemini_configured()
-        prompt = (
-            f"The following is metadata from a YouTube video ({video_url}). "
-            "Expand it into detailed educational notes covering the likely topics, "
-            "key concepts, and learning points. Be thorough.\n\n"
-            f"{page_text[:8000]}"
-        )
-        model = genai.GenerativeModel(get_settings().gen_model)
-        resp = model.generate_content(prompt)
-        return (resp.text or "").strip() or None
-    except Exception as exc:
-        logger.error("YouTube Gemini fallback failed: %s", exc)
+        from knowledge_forge.prompts import youtube_metadata_prompt
+
+        return generate_content(youtube_metadata_prompt(video_url, page_text[:8000])) or None
+    except KnowledgeForgeError as exc:
+        logger.error("YouTube metadata fallback failed: %s", str(exc))
         return None
 
 
@@ -191,11 +323,7 @@ def get_youtube_transcript(video_url: str) -> tuple[str | None, str]:
         )
 
         api = YouTubeTranscriptApi()
-        language_sets = [
-            ["en", "en-US", "en-GB"],
-            ["en"],
-            ["hi", "es", "fr", "de", "pt", "ja", "ko", "ar"],
-        ]
+        language_sets = [list(get_settings().youtube_languages or ("en",))]
         for langs in language_sets:
             try:
                 fetched = api.fetch(vid_id, languages=langs)
@@ -235,10 +363,11 @@ def get_youtube_transcript(video_url: str) -> tuple[str | None, str]:
         last_error = "youtube-transcript-api is not installed. Run: pip install -r requirements.txt"
     except Exception as exc:
         last_error = str(exc)
-        logger.error("YouTube transcript error for %s: %s", vid_id, exc)
+        logger.error("YouTube transcript error for %s: %s", vid_id, type(exc).__name__)
 
-    # Fallback: oEmbed metadata → Gemini educational notes (works on cloud when captions API is blocked)
-    meta = _fetch_youtube_oembed(watch_url)
+    # Opt-in fallback: notes generated from title/channel only. Off by default because the
+    # result is the model's guess at the content, not the video's actual content.
+    meta = _fetch_youtube_oembed(watch_url) if get_settings().youtube_metadata_fallback else None
     if meta:
         enriched = f"{meta}\nVideo URL: {watch_url}\nVideo ID: {vid_id}"
         gemini_text = _youtube_gemini_fallback(watch_url, enriched)
@@ -288,12 +417,9 @@ def ingest_text_source(source: str, source_type: str) -> tuple[str | None, str, 
         problem = validate_public_url(source)
         if problem:
             return None, problem, "web"
-        text = crawl_url(source)
+        text, reason = crawl_url_detailed(source)
         if not text:
-            return None, (
-                "Could not extract readable text. For YouTube links use the YouTube tab. "
-                "For blocked sites, paste content as Text."
-            ), "web"
+            return None, reason or "Could not extract readable text. Paste the content as Text instead.", "web"
         return text, "", "web"
 
     return None, f"Unknown source type: {stype}", stype
@@ -311,13 +437,13 @@ def ingest_pdf_bytes(data: bytes) -> str | None:
             texts = [page.get_text("text") for page in doc]
         raw = "\n".join(texts).strip()
         # Very little text usually means a scanned PDF: fall back to Gemini OCR.
-        if len(raw) < 100:
+        if len(raw) < get_settings().pdf_ocr_min_chars:
             return ingest_pdf_via_gemini_bytes(data)
         return raw
     except IngestionError:
         raise
     except Exception as exc:
-        logger.error("PDF extraction error: %s", exc)
+        logger.error("PDF extraction error: %s", type(exc).__name__)
         return ingest_pdf_via_gemini_bytes(data)
 
 
@@ -344,10 +470,11 @@ def ingest_file_via_gemini(data: bytes, mime_type: str, prompt: str) -> str | No
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(data)
             tmp_path = tmp.name
-        uploaded = genai.upload_file(tmp_path, mime_type=mime_type)
+        uploaded = gemini.upload_file(tmp_path, mime_type)
         for _ in range(get_settings().gemini_file_max_polls):
-            f = genai.get_file(uploaded.name)
-            state = f.state.name if hasattr(f.state, "name") else str(f.state)
+            f = gemini.get_file(uploaded.name)
+            state = getattr(f.state, "name", None) or str(f.state)
+            state = state.rsplit(".", 1)[-1]
             if state == "ACTIVE":
                 break
             if state == "FAILED":
@@ -356,20 +483,23 @@ def ingest_file_via_gemini(data: bytes, mime_type: str, prompt: str) -> str | No
         else:
             raise TimeoutError("Gemini file processing timed out.")
 
-        model = genai.GenerativeModel(get_settings().gen_model)
-        resp = model.generate_content([uploaded, prompt])
-        return (resp.text or "").strip() or None
+        return gemini.generate([uploaded, prompt]) or None
+    except (ConfigurationError, RateLimitError):
+        raise
+    except KnowledgeForgeError as exc:
+        logger.error("Gemini file ingestion error (%s): %s", mime_type, str(exc))
+        return None
     except Exception as exc:
-        logger.error("Gemini file ingestion error (%s): %s", mime_type, exc)
+        logger.error("Gemini file ingestion error (%s): %s", mime_type, type(exc).__name__)
         return None
     finally:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
         if uploaded:
             try:
-                genai.delete_file(uploaded.name)
+                gemini.delete_file(uploaded.name)
             except Exception:
-                pass
+                logger.debug("Could not delete uploaded Gemini file", exc_info=True)
 
 
 def detect_file_type(filename: str, mime_type: str) -> tuple[str, str] | None:
@@ -386,3 +516,52 @@ def detect_file_type(filename: str, mime_type: str) -> tuple[str, str] | None:
     if lower.endswith((".txt", ".md", ".markdown")) or mime_type in ("text/plain", "text/markdown"):
         return "text", "text/plain"
     return None
+
+
+def _magic_kind(head: bytes) -> str | None:
+    """Identify a file family from its leading bytes."""
+    if head.startswith(b"%PDF-"):
+        return "pdf"
+    if head.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a")):
+        return "image"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "image"
+    if head[:4] == b"RIFF" and head[8:12] == b"WAVE":
+        return "audio"
+    if head.startswith((b"ID3", b"OggS", b"fLaC")) or head[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"):
+        return "audio"
+    if head[4:8] == b"ftyp":
+        brand = head[8:12]
+        return "audio" if brand in (b"M4A ", b"M4B ") else "video"
+    if head.startswith(b"\x1aE\xdf\xa3"):
+        return "video"
+    return None
+
+
+def sniff_file_type(filename: str, mime_type: str, head: bytes) -> tuple[str, str] | None:
+    """Like :func:`detect_file_type` but verifies the content's magic bytes.
+
+    Returns None when the declared type is unsupported or the bytes do not match it
+    (e.g. an executable renamed to ``.pdf``). Text files must be NUL-free UTF-8-ish text.
+    """
+    declared = detect_file_type(filename, mime_type or "")
+    if not declared:
+        return None
+    kind, mime = declared
+    if kind == "text":
+        if b"\x00" in head:
+            return None
+        return declared
+    actual = _magic_kind(head)
+    if actual != kind:
+        return None
+    if kind == "audio" and head[4:8] == b"ftyp":
+        mime = "audio/x-m4a"
+    return kind, mime
+
+
+def safe_filename(name: str, max_len: int = 120) -> str:
+    """Strip directories/control characters from an uploaded filename for display."""
+    base = re.split(r"[\\/]", name or "")[-1]
+    base = re.sub(r"[\x00-\x1f\x7f]", "", base).strip().strip(".") or "upload"
+    return base[:max_len]

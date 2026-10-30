@@ -48,7 +48,7 @@ def test_ingest_text_source_text_is_never_treated_as_url():
 
 def test_ingest_web_uses_crawler(monkeypatch):
     monkeypatch.setattr(ingestion, "validate_public_url", lambda _u: None)
-    monkeypatch.setattr(ingestion, "crawl_url", lambda u: f"content of {u}")
+    monkeypatch.setattr(ingestion, "crawl_url_detailed", lambda u: (f"content of {u}", ""))
     text, err, stype = ingestion.ingest_text_source("example.com", "web")
     assert text == "content of https://example.com" and stype == "web" and not err
 
@@ -63,34 +63,103 @@ def test_youtube_link_is_detected_from_web(monkeypatch):
     assert ingestion.ingest_text_source("https://youtu.be/dQw4w9WgXcQ", "web")[2] == "youtube"
 
 
+class _Resp:
+    def __init__(self, body=b"", status=200, headers=None):
+        self.status_code = status
+        self._body = body
+        self.headers = headers if headers is not None else {"content-type": "text/html; charset=utf-8"}
+        self.encoding = "utf-8"
+        self.apparent_encoding = "utf-8"
+        self.closed = False
+
+    def iter_content(self, size):
+        for i in range(0, len(self._body), size):
+            yield self._body[i:i + size]
+
+    def close(self):
+        self.closed = True
+
+
 def test_crawl_url_extracts_main_text(monkeypatch):
     html = "<html><body><nav>menu</nav><article><p>" + "Useful words here. " * 20 + "</p></article></body></html>"
-
-    class Resp:
-        status_code = 200
-        text = html
-        content = html.encode()
-        headers = {"content-type": "text/html"}
-        encoding = "utf-8"
-        apparent_encoding = "utf-8"
-
-        def raise_for_status(self):
-            pass
-
     monkeypatch.setattr(ingestion, "validate_public_url", lambda _u: None)
-    monkeypatch.setattr(ingestion.requests, "get", lambda *_a, **_k: Resp())
+    monkeypatch.setattr(ingestion, "_http_get", lambda *_a, **_k: _Resp(html.encode()))
     text = ingestion.crawl_url("https://example.com")
     assert text and "Useful words here." in text and "menu" not in text
 
 
 def test_crawl_url_blocks_redirect_to_private(monkeypatch):
-    class Redirect:
-        status_code = 302
-        headers = {"location": "http://169.254.169.254/latest"}
-
+    redirect = _Resp(status=302, headers={"location": "http://169.254.169.254/latest"})
     monkeypatch.setattr(ingestion, "validate_public_url", lambda u: "private" if "169.254" in u else None)
-    monkeypatch.setattr(ingestion.requests, "get", lambda *_a, **_k: Redirect())
+    monkeypatch.setattr(ingestion, "_http_get", lambda *_a, **_k: redirect)
     assert ingestion.crawl_url("https://example.com") is None
+    assert redirect.closed
+
+
+def test_crawl_rejects_oversized_and_binary(monkeypatch):
+    monkeypatch.setenv("CRAWL_MAX_BYTES", "10000")
+    from knowledge_forge import config
+
+    config.get_settings.cache_clear()
+    monkeypatch.setattr(ingestion, "validate_public_url", lambda _u: None)
+    monkeypatch.setattr(ingestion, "_http_get", lambda *_a, **_k: _Resp(b"x" * 50000))
+    text, reason = ingestion.crawl_url_detailed("https://example.com")
+    assert text is None and "limit" in reason
+    pdf = _Resp(b"%PDF-1.4", headers={"content-type": "application/pdf"})
+    monkeypatch.setattr(ingestion, "_http_get", lambda *_a, **_k: pdf)
+    text, reason = ingestion.crawl_url_detailed("https://example.com/a.pdf")
+    assert text is None and reason
+
+
+def test_crawl_too_many_redirects(monkeypatch):
+    monkeypatch.setattr(ingestion, "validate_public_url", lambda _u: None)
+    monkeypatch.setattr(ingestion, "_http_get",
+                        lambda *_a, **_k: _Resp(status=301, headers={"location": "/again"}))
+    assert ingestion.crawl_url_detailed("https://example.com")[0] is None
+
+
+@pytest.mark.parametrize("ip", ["127.0.0.1", "10.1.2.3", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1",
+                                "fe80::1", "fc00::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "224.0.0.1",
+                                "2002:7f00:0001::", "not-an-ip"])
+def test_is_blocked_ip_blocks_non_public(ip):
+    assert ingestion.is_blocked_ip(ip)
+
+
+@pytest.mark.parametrize("ip", ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946", "8.8.8.8"])
+def test_is_blocked_ip_allows_public(ip):
+    assert not ingestion.is_blocked_ip(ip)
+
+
+@pytest.mark.parametrize("url", ["http://user:pw@example.com", "http://example.com:99999", "http://printer.local",
+                                 "http://db.internal", "file:///etc/passwd", "gopher://example.com",
+                                 "http://[::1]/"])
+def test_validate_public_url_rejects_tricks(url, monkeypatch):
+    monkeypatch.setattr(ingestion.socket, "getaddrinfo", _resolve_to("93.184.216.34"))
+    assert ingestion.validate_public_url(url) is not None
+
+
+def test_guarded_connection_refuses_rebound_private_address(monkeypatch):
+    """DNS rebinding: the pre-check saw a public IP, the connect-time lookup returns a private one."""
+    monkeypatch.setattr(ingestion.socket, "getaddrinfo", _resolve_to("127.0.0.1"))
+    with pytest.raises(OSError):
+        ingestion._guarded_create_connection(("example.com", 80), timeout=1)
+
+
+def test_sniff_file_type_checks_magic_bytes():
+    assert ingestion.sniff_file_type("a.pdf", "application/pdf", b"%PDF-1.7 ...")[0] == "pdf"
+    assert ingestion.sniff_file_type("a.pdf", "application/pdf", b"MZ\x90\x00evil") is None
+    assert ingestion.sniff_file_type("a.png", "image/png", b"\x89PNG\r\n\x1a\n....")[0] == "image"
+    assert ingestion.sniff_file_type("a.txt", "text/plain", b"hello") == ("text", "text/plain") or \
+        ingestion.sniff_file_type("a.txt", "text/plain", b"hello")[0] == "text"
+    assert ingestion.sniff_file_type("a.txt", "text/plain", b"he\x00llo") is None
+    assert ingestion.sniff_file_type("a.exe", "application/octet-stream", b"MZ") is None
+
+
+def test_safe_filename_strips_paths_and_controls():
+    assert ingestion.safe_filename("../../etc/passwd") == "passwd"
+    assert ingestion.safe_filename("C:\\x\\evil\x00.txt") == "evil.txt"
+    assert ingestion.safe_filename("") == "upload"
+    assert len(ingestion.safe_filename("a" * 500 + ".pdf")) <= 120
 
 
 def _make_pdf(text="", password=None):
