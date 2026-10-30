@@ -10,7 +10,7 @@ pymupdf==1.28.2
 rank-bm25==0.2.2
 faiss-cpu==1.15.1
 numpy==2.2.6
-google-generativeai==0.8.6
+google-genai==2.34.0
 scikit-learn==1.7.2
 matplotlib==3.10.8
 # Optional production backends (VECTOR_STORE=qdrant, REDIS_URL)

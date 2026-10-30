@@ -3,7 +3,7 @@ import hashlib
 import numpy as np
 import pytest
 
-from knowledge_forge import cache, config, embeddings, knowledge_base, llm
+from knowledge_forge import cache, config, embeddings, gemini, knowledge_base
 
 DIM = 16
 
@@ -36,8 +36,12 @@ def isolated_env(tmp_path, monkeypatch):
     cache.reset_kb_version()
     embeddings.reset_embedding_state()
     knowledge_base.reset_knowledge_base()
-    monkeypatch.setattr(llm.genai, "configure", lambda **_: None)
-    llm._configured_key = None
+    gemini.reset_client()
+
+    def _no_network_client():
+        raise AssertionError("Test tried to reach Gemini; patch generate_content/gemini_embed instead.")
+
+    monkeypatch.setattr(gemini, "get_client", _no_network_client)
     yield
     config.get_settings.cache_clear()
     knowledge_base.reset_knowledge_base()

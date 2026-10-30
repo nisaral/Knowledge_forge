@@ -31,6 +31,18 @@ class LLMError(KnowledgeForgeError):
     status = 502
 
 
+class RateLimitError(KnowledgeForgeError):
+    """Too many requests (from this client, or upstream at Gemini)."""
+
+    status = 429
+
+
+class NotFoundError(KnowledgeForgeError):
+    """A referenced resource (e.g. a source) does not exist."""
+
+    status = 404
+
+
 MISSING_KEY_MESSAGE = (
     "GEMINI_API_KEY is not set. Create a key at https://aistudio.google.com/apikey and "
     "export it (or add it to a local .env file), then restart the server."
