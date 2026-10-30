@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/nisaral/Knowledge_forge/actions/workflows/ci.yml/badge.svg)](https://github.com/nisaral/Knowledge_forge/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Stars](https://img.shields.io/github/stars/nisaral/Knowledge_forge?style=flat)](https://github.com/nisaral/Knowledge_forge/stargazers)
 
 KnowledgeForge is a small Flask app for retrieval-augmented learning. You add sources (web pages, YouTube
 transcripts, pasted text, PDFs, Markdown, audio, video and images), then chat with them and get cited
@@ -19,6 +21,23 @@ clusters. Gemini handles embeddings and generation.
 | ![Mobile](docs/screenshot-mobile.png) | ![Mobile sidebar](docs/screenshot-mobile-sidebar.png) | ![Tablet](docs/screenshot-tablet.png) |
 
 The screenshots use a demo server with a mocked model, so the answers in them are illustrative.
+
+**Live demo:** [knowledge-forge.onrender.com](https://knowledge-forge.onrender.com) (Render free tier: the first load may take about 60 seconds while the server wakes up, and the shared demo can hit Gemini rate limits).
+
+## 30-second quickstart (Docker)
+
+You need Docker and a [Gemini API key](https://aistudio.google.com/).
+
+```bash
+git clone https://github.com/nisaral/Knowledge_forge.git && cd Knowledge_forge
+GEMINI_API_KEY=your-key FLASK_SECRET=$(openssl rand -hex 16) docker compose up --build   # app + Qdrant + Redis -> http://localhost:8000
+```
+
+Single container, local FAISS store, no Qdrant/Redis:
+
+```bash
+docker build -t knowledge-forge -f dockerfile . && docker run --rm -p 8000:8000 -e VECTOR_STORE=local -e GEMINI_API_KEY=your-key -e FLASK_SECRET=$(openssl rand -hex 16) knowledge-forge
+```
 
 ## Features
 
@@ -167,9 +186,17 @@ CI (`.github/workflows/ci.yml`) runs ruff and then pytest on Python 3.10, 3.11 a
 - Add a pluggable model provider (OpenAI-compatible or local models).
 - Add a retrieval evaluation harness.
 
-## Contributing / License
+## Contributing / Help wanted
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under the [MIT License](LICENSE).
+Contributions are welcome, from typo fixes to new ingestion sources. Starter tasks with acceptance criteria are labelled
+[good first issue](https://github.com/nisaral/Knowledge_forge/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) and
+[help wanted](https://github.com/nisaral/Knowledge_forge/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
+The test suite runs offline (Gemini and the network are mocked), so you do not need an API key to contribute.
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE).
 
 
 > **Testing status:** see [docs/TESTING.md](docs/TESTING.md). In the live run with a real Gemini key, the embeddings were real. Every generation call was rate-limited (HTTP 429), so the storyboard, flashcard and graph screenshots in `docs/e2e/` show the built-in text fallback, not model output.
