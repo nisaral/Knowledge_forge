@@ -6,14 +6,7 @@
 <title>KnowledgeForge — AI learning companion</title>
 <meta name="description" content="Turn your documents, web pages and videos into a searchable study companion.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%234f46e5'/><path d='M9 9h4v14H9zM15 15l7-6h4l-8 7 8 7h-4z' fill='white'/></svg>">
-<script>
-  // Apply the saved/system theme before first paint to avoid a flash.
-  (function () {
-    var t = localStorage.getItem("kf-theme") ||
-      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-    document.documentElement.setAttribute("data-theme", t);
-  })();
-</script>
+<script src="{{ url_for('static', filename='theme.js') }}?v={{ version }}"></script>
 <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}?v={{ version }}">
 </head>
 <body>
@@ -36,8 +29,22 @@
   <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
   <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></symbol>
   <symbol id="i-spark" viewBox="0 0 24 24"><path d="M12 3l1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2z"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-zoom-in" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M11 8v6M8 11h6"/></symbol>
+  <symbol id="i-zoom-out" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3M8 11h6"/></symbol>
+  <symbol id="i-fit" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v12M7 11l5 5 5-5M4 20h16"/></symbol>
+  <symbol id="i-keyboard" viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 5v14M5 12l7 7 7-7"/></symbol>
+  <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+  <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+  <symbol id="i-shuffle" viewBox="0 0 24 24"><path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></symbol>
 </svg>
 
+<a class="skip-link" href="#chat-input">Skip to chat</a>
 <div class="app">
   <aside class="sidebar" id="sidebar" aria-label="Knowledge base">
     <div class="brand">
@@ -90,8 +97,10 @@
         <button class="link-btn danger" id="clear-all" hidden>Clear all</button>
       </div>
       <div class="scope" id="scope-hint">Answers use <strong>all sources</strong>. Select one to focus.</div>
-      <ul class="source-list" id="source-list" aria-live="polite"></ul>
-      <div class="empty-mini" id="sources-empty">
+      <ul class="source-list" id="source-list" aria-live="polite" aria-busy="true">
+        <li class="source-skel"></li><li class="source-skel"></li><li class="source-skel"></li>
+      </ul>
+      <div class="empty-mini" id="sources-empty" hidden>
         <svg><use href="#i-book"/></svg>
         <p>No sources yet. Add a link, paste notes or upload a file to get started.</p>
       </div>
@@ -110,13 +119,16 @@
     <header class="topbar">
       <button class="icon-btn only-mobile" id="open-sidebar" aria-label="Open sidebar"><svg><use href="#i-menu"/></svg></button>
       <nav class="tabs" role="tablist" aria-label="Views">
-        <button role="tab" class="tab active" data-view="chat" aria-selected="true"><svg><use href="#i-chat"/></svg><span>Chat</span></button>
-        <button role="tab" class="tab" data-view="tools" aria-selected="false"><svg><use href="#i-book"/></svg><span>Study tools</span></button>
-        <button role="tab" class="tab" data-view="insights" aria-selected="false"><svg><use href="#i-chart"/></svg><span>Insights</span></button>
+        <button role="tab" class="tab active" id="tab-chat" aria-controls="view-chat" data-view="chat" aria-selected="true"><svg><use href="#i-chat"/></svg><span>Chat</span></button>
+        <button role="tab" class="tab" id="tab-tools" aria-controls="view-tools" data-view="tools" aria-selected="false"><svg><use href="#i-book"/></svg><span>Study tools</span></button>
+        <button role="tab" class="tab" id="tab-insights" aria-controls="view-insights" data-view="insights" aria-selected="false"><svg><use href="#i-chart"/></svg><span>Insights</span></button>
       </nav>
+      <div class="topbar-right">
       <div class="scope-pill" id="scope-pill" hidden>
         <span id="scope-pill-text"></span>
         <button class="icon-btn tiny" id="scope-clear" aria-label="Use all sources"><svg><use href="#i-x"/></svg></button>
+      </div>
+      <button class="icon-btn" id="shortcuts-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)"><svg><use href="#i-keyboard"/></svg></button>
       </div>
     </header>
 
@@ -125,9 +137,9 @@
     </div>
 
     <!-- Chat -->
-    <section class="view" id="view-chat" data-view-pane="chat">
+    <section class="view" id="view-chat" data-view-pane="chat" role="tabpanel" aria-labelledby="tab-chat">
       <div class="chat-scroll" id="chat-scroll">
-        <div class="chat-inner" id="chat-log"></div>
+        <div class="chat-inner" id="chat-log" role="log" aria-live="polite" aria-relevant="additions"></div>
         <div class="empty-state" id="chat-empty">
           <div class="empty-icon"><svg><use href="#i-spark"/></svg></div>
           <h1>Ask anything about your sources</h1>
@@ -139,18 +151,21 @@
           </div>
         </div>
       </div>
+      <button class="jump" id="jump-latest" hidden><svg><use href="#i-down"/></svg>Latest</button>
       <form class="composer" id="chat-form">
         <label class="sr-only" for="chat-input">Message</label>
-        <textarea id="chat-input" rows="1" placeholder="Ask a question…  (Enter to send, Shift+Enter for a new line)" maxlength="4000"></textarea>
+        <textarea id="chat-input" rows="1" placeholder="Ask a question…" maxlength="{{ max_question_chars }}" aria-describedby="composer-hint"></textarea>
         <div class="composer-actions">
           <button type="button" class="icon-btn" id="chat-clear" title="Clear conversation" aria-label="Clear conversation"><svg><use href="#i-trash"/></svg></button>
+          <button type="button" class="btn stop" id="chat-stop" aria-label="Stop generating" hidden><svg><use href="#i-stop"/></svg></button>
           <button type="submit" class="btn primary" id="chat-send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
         </div>
       </form>
+      <p class="composer-hint" id="composer-hint"><kbd>Enter</kbd> send · <kbd>Shift</kbd>+<kbd>Enter</kbd> new line · <kbd>/</kbd> focus · <kbd>?</kbd> shortcuts</p>
     </section>
 
     <!-- Study tools -->
-    <section class="view hidden" id="view-tools" data-view-pane="tools">
+    <section class="view hidden" id="view-tools" data-view-pane="tools" role="tabpanel" aria-labelledby="tab-tools">
       <div class="view-inner">
         <div class="tool-bar">
           <label class="sr-only" for="tool-topic">Topic</label>
@@ -158,19 +173,19 @@
         </div>
         <div class="tool-grid" id="tool-grid">
           <button class="tool-card" data-tool="summary" data-needs-topic="false"><strong>Summary</strong><span>Concise bullet summary of the selected source(s)</span></button>
-          <button class="tool-card" data-tool="mock_test"><strong>Mock test</strong><span>Mixed MCQs, short and long answers with a key</span></button>
-          <button class="tool-card" data-tool="flashcards"><strong>Flashcards</strong><span>Flip cards for quick recall</span></button>
+          <button class="tool-card" data-tool="quiz"><strong>Quiz</strong><span>Five scored multiple-choice questions with explanations</span></button>
+          <button class="tool-card" data-tool="flashcards"><strong>Flashcards</strong><span>A flip-card deck with progress tracking</span></button>
           <button class="tool-card" data-tool="mindmap"><strong>Mind map</strong><span>Visual map of related concepts</span></button>
-          <button class="tool-card" data-tool="flowchart"><strong>Flowchart</strong><span>Step-by-step process diagram</span></button>
+          <button class="tool-card" data-tool="flowchart"><strong>Flowchart</strong><span>Step-by-step diagram you can zoom, pan and export</span></button>
           <button class="tool-card" data-tool="storyboard"><strong>Storyboard</strong><span>The topic told as a sequence of scenes</span></button>
           <button class="tool-card" data-tool="study_plan"><strong>Study plan</strong><span>A structured multi-day plan</span></button>
         </div>
-        <div class="result" id="tool-result" hidden></div>
+        <div class="result" id="tool-result" hidden aria-live="polite"></div>
       </div>
     </section>
 
     <!-- Insights -->
-    <section class="view hidden" id="view-insights" data-view-pane="insights">
+    <section class="view hidden" id="view-insights" data-view-pane="insights" role="tabpanel" aria-labelledby="tab-insights">
       <div class="view-inner">
         <div class="insight-grid">
           <article class="card">
@@ -193,7 +208,22 @@
   </main>
 </div>
 
-<div class="toasts" id="toasts" aria-live="assertive"></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<div class="cite-pop" id="cite-pop" role="tooltip" hidden></div>
+
+<dialog class="modal" id="shortcuts" aria-labelledby="shortcuts-title">
+  <div class="modal-head"><h2 id="shortcuts-title">Keyboard shortcuts</h2>
+    <button class="icon-btn" id="shortcuts-close" aria-label="Close"><svg><use href="#i-x"/></svg></button></div>
+  <dl class="keys">
+    <dt><kbd>/</kbd></dt><dd>Focus the message box</dd>
+    <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Add a link</dd>
+    <dt><kbd>Alt</kbd> <kbd>1</kbd>–<kbd>3</kbd></dt><dd>Chat, study tools, insights</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Stop generating / close panels</dd>
+    <dt><kbd>Space</kbd></dt><dd>Flip the current flashcard</dd>
+    <dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>Previous / next flashcard</dd>
+    <dt><kbd>?</kbd></dt><dd>Show this help</dd>
+  </dl>
+</dialog>
 
 <script src="{{ url_for('static', filename='mermaid.min.js') }}"></script>
 <script src="{{ url_for('static', filename='app.js') }}?v={{ version }}"></script>

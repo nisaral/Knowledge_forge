@@ -211,3 +211,15 @@ def test_cors_opt_in(monkeypatch, fake_embed):
     allowed = web.create_app(kb=KnowledgeBase()).test_client()
     assert allowed.get("/api/health", headers={"Origin": "https://x.dev"}).headers["Access-Control-Allow-Origin"] \
         == "https://x.dev"
+
+
+def test_index_has_no_inline_scripts_for_csp(client):
+    import re
+
+    html = client.get("/").get_data(as_text=True)
+    scripts = re.findall(r"<script\b([^>]*)>(.*?)</script>", html, flags=re.S)
+    assert scripts, "expected external scripts"
+    for attrs, body in scripts:
+        assert "src=" in attrs and not body.strip(), "inline <script> would be blocked by script-src 'self'"
+    assert "theme.js" in html
+    assert 'data-tool="quiz"' in html and 'data-tool="mock_test"' not in html
