@@ -47,3 +47,12 @@ MISSING_KEY_MESSAGE = (
     "GEMINI_API_KEY is not set. Create a key at https://aistudio.google.com/apikey and "
     "export it (or add it to a local .env file), then restart the server."
 )
+
+
+class EmptyKnowledgeBase(KnowledgeForgeError):
+    """An operation needs content but the knowledge base is empty."""
+
+    status = 422
+
+    def __init__(self, message: str = "Knowledge base is empty. Add a web page, document or video first.") -> None:
+        super().__init__(message)
