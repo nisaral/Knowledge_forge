@@ -90,7 +90,25 @@ All settings come from environment variables. `.env.example` lists them all.
 | `MAX_UPLOAD_MB` | `50` | |
 | `ALLOW_PRIVATE_URLS` | `false` | Leave off unless you trust every user |
 | `CORS_ORIGINS` | – | Comma-separated; CORS is off when this is empty |
-| `GUNICORN_WORKERS` / `GUNICORN_THREADS` / `GUNICORN_TIMEOUT` | – / `8` / `180` | |
+| `MIN_RELEVANCE` | `0.0` | Drop fused hits scoring below this (0–1) |
+| `EMBED_FALLBACK_MODELS` | `models/gemini-embedding-001,models/text-embedding-004` | Comma-separated embedding models to try if `EMBED_MODEL` is unavailable |
+| `LLM_TEMPERATURE` / `LLM_MAX_OUTPUT_TOKENS` | `0.3` / `0` (model default) | |
+| `GEMINI_TIMEOUT_SECONDS` | `60` | Per-request timeout for Gemini calls |
+| `LLM_MAX_RETRIES` / `LLM_RETRY_BASE_SECONDS` / `LLM_RETRY_MAX_SECONDS` | `3` / `1.0` / `8.0` | Exponential backoff with jitter on 408/429/5xx and timeouts |
+| `SUMMARY_MAX_CHARS` / `ENTITY_MAX_CHARS` | `24000` / `6000` | Context budget, sampled evenly across sources |
+| `CLUSTER_MIN_CHUNKS` / `CLUSTER_MAX_TOPICS` | `5` / `5` | Topic map |
+| `CRAWL_TIMEOUT_SECONDS` / `CRAWL_MAX_BYTES` / `CRAWL_MAX_REDIRECTS` | `15` / `5242880` / `5` | Every redirect hop and the connected IP are re-checked |
+| `CRAWL_USER_AGENT` | `KnowledgeForge/2 (+repo URL)` | |
+| `YOUTUBE_LANGUAGES` | `en,en-US,en-GB` | Transcript language preference |
+| `YOUTUBE_METADATA_FALLBACK` | `false` | When a video has no transcript, ask Gemini to describe it (may be inaccurate) |
+| `PDF_OCR_MIN_CHARS` | `100` | Below this much extracted text a PDF is sent to Gemini for OCR |
+| `RATE_LIMIT_PER_MINUTE` | `30` | Per client IP, per worker, on LLM-backed endpoints; `0` disables |
+| `TRUSTED_PROXIES` | `0` | Number of reverse proxies whose `X-Forwarded-*` headers to trust |
+| `FAISS_NPROBE` / `QDRANT_TIMEOUT_SECONDS` | `16` / `30` | |
+| `HOST` / `PORT` / `FLASK_DEBUG` | `127.0.0.1` / `5000` / `false` | Dev server only |
+| `LOG_LEVEL` / `LOG_FORMAT` | `INFO` / `text` | `LOG_FORMAT=json` for structured logs; secrets are redacted |
+| `GUNICORN_WORKERS` / `GUNICORN_THREADS` / `GUNICORN_TIMEOUT` | `1` (`2` with Qdrant) / `8` / `180` | More than one worker requires `VECTOR_STORE=qdrant` |
+| `GUNICORN_GRACEFUL_TIMEOUT` / `GUNICORN_KEEPALIVE` | `30` / `5` | |
 
 ## Tests and lint
 
@@ -111,12 +129,11 @@ CI (`.github/workflows/ci.yml`) runs ruff and then pytest on Python 3.10, 3.11 a
 - YouTube ingestion depends on public transcripts, and some videos have none or are blocked by region or bot checks.
 - Crawling takes static HTML only, so JavaScript-rendered pages may yield little text.
 - Retrieval quality has not been formally benchmarked.
+- The rate limiter is in memory, so the limit applies per worker process.
 
 ## Roadmap
 
-- Migrate from the deprecated `google-generativeai` SDK to `google-genai`.
 - Add per-user workspaces and authentication.
-- Stream chat responses (SSE).
 - Run ingestion as background jobs with progress reporting.
 - Add a pluggable model provider (OpenAI-compatible or local models).
 - Add a retrieval evaluation harness.
