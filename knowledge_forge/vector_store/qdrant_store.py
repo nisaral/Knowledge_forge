@@ -1,4 +1,6 @@
 """Qdrant vector store for horizontally scalable multi-instance deployments."""
+from __future__ import annotations
+
 import logging
 import uuid
 from typing import Any
@@ -7,18 +9,20 @@ import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
 
-from config import EMBED_DIM, QDRANT_API_KEY, QDRANT_COLLECTION, QDRANT_URL
-from services.vector_store.base import VectorStore
+from knowledge_forge.config import get_settings
+from knowledge_forge.vector_store.base import VectorStore
 
 logger = logging.getLogger(__name__)
 
 
 class QdrantStore(VectorStore):
     def __init__(self):
-        self.collection = QDRANT_COLLECTION
+        settings = get_settings()
+        self.dim = settings.embed_dim
+        self.collection = settings.qdrant_collection
         self.client = QdrantClient(
-            url=QDRANT_URL,
-            api_key=QDRANT_API_KEY or None,
+            url=settings.qdrant_url,
+            api_key=settings.qdrant_api_key or None,
             timeout=30,
         )
         self._ensure_collection()
@@ -29,7 +33,7 @@ class QdrantStore(VectorStore):
         logger.info("Creating Qdrant collection '%s'", self.collection)
         self.client.create_collection(
             collection_name=self.collection,
-            vectors_config=qm.VectorParams(size=EMBED_DIM, distance=qm.Distance.COSINE),
+            vectors_config=qm.VectorParams(size=self.dim, distance=qm.Distance.COSINE),
         )
         self.client.create_payload_index(
             collection_name=self.collection,
@@ -59,6 +63,7 @@ class QdrantStore(VectorStore):
                         "source": record["source"],
                         "source_type": record.get("source_type", "text"),
                         "metadata": record.get("metadata", {}),
+                        "hash": record.get("hash", ""),
                     },
                 )
             )
@@ -72,13 +77,13 @@ class QdrantStore(VectorStore):
     ) -> list[dict[str, Any]]:
         vec = query_vector.flatten()
         vec = vec / (np.linalg.norm(vec) + 1e-12)
-        results = self.client.search(
+        results = self.client.query_points(
             collection_name=self.collection,
-            query_vector=vec.tolist(),
+            query=vec.tolist(),
             query_filter=self._source_filter(source_filter),
             limit=k,
             with_payload=True,
-        )
+        ).points
         hits = []
         for point in results:
             payload = point.payload or {}
@@ -88,6 +93,7 @@ class QdrantStore(VectorStore):
                 "source": payload.get("source", ""),
                 "source_type": payload.get("source_type", "text"),
                 "metadata": payload.get("metadata", {}),
+                "hash": payload.get("hash", ""),
                 "score": float(point.score or 0.0),
             })
         return hits
@@ -113,6 +119,7 @@ class QdrantStore(VectorStore):
                     "source": payload.get("source", ""),
                     "source_type": payload.get("source_type", "text"),
                     "metadata": payload.get("metadata", {}),
+                "hash": payload.get("hash", ""),
                 })
             if offset is None:
                 break
@@ -137,12 +144,24 @@ class QdrantStore(VectorStore):
                     "source": payload.get("source", ""),
                     "source_type": payload.get("source_type", "text"),
                     "metadata": payload.get("metadata", {}),
+                "hash": payload.get("hash", ""),
                 }
                 vec = np.array(record.vector, dtype="float32")
                 pairs.append((chunk, vec))
             if offset is None:
                 break
         return pairs
+
+    def delete_source(self, source: str) -> int:
+        flt = self._source_filter(source)
+        removed = self.client.count(collection_name=self.collection, count_filter=flt, exact=True).count
+        if removed:
+            self.client.delete(
+                collection_name=self.collection,
+                points_selector=qm.FilterSelector(filter=flt),
+                wait=True,
+            )
+        return int(removed)
 
     def count(self) -> int:
         info = self.client.get_collection(self.collection)
@@ -170,5 +189,4 @@ class QdrantStore(VectorStore):
             "vectors": self.count(),
             "sources": len(sources),
             "collection": self.collection,
-            "url": QDRANT_URL,
         }

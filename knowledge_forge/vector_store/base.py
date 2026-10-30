@@ -1,4 +1,6 @@
 """Vector store interface for KnowledgeForge."""
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -26,6 +28,10 @@ class VectorStore(ABC):
     @abstractmethod
     def scroll_with_vectors(self) -> list[tuple[dict, np.ndarray]]:
         """Return all chunks paired with vectors (for clustering)."""
+
+    @abstractmethod
+    def delete_source(self, source: str) -> int:
+        """Delete every chunk of ``source``; return the number removed."""
 
     @abstractmethod
     def count(self) -> int:

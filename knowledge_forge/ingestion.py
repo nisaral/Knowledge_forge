@@ -1,22 +1,22 @@
 """Multimodal content ingestion helpers."""
+from __future__ import annotations
+
+import ipaddress
 import logging
 import mimetypes
 import os
 import re
+import socket
 import tempfile
 import time
+from urllib.parse import urlparse
 
 import google.generativeai as genai
 import requests
 from bs4 import BeautifulSoup
 
-from config import (
-    CRAWL_TIMEOUT_SECONDS,
-    GEMINI_FILE_MAX_POLLS,
-    GEMINI_FILE_POLL_SECONDS,
-    GEN_MODEL,
-)
-from services.embeddings import ensure_gemini_configured
+from knowledge_forge.config import get_settings
+from knowledge_forge.llm import ensure_gemini_configured
 
 logger = logging.getLogger(__name__)
 
@@ -26,27 +26,50 @@ _BROWSER_UA = (
 )
 
 
-def chunk_text(text: str, size: int, overlap: int) -> list[str]:
-    """Sliding-window word chunker with overlap."""
-    words = re.split(r"\s+", text.strip())
-    if not words or (len(words) == 1 and not words[0]):
-        return []
-    chunks = []
-    step = max(1, size - overlap)
-    for i in range(0, len(words), step):
-        chunk = " ".join(words[i:i + size])
-        if chunk.strip():
-            chunks.append(chunk)
-    return chunks
+_YT_HOST = re.compile(r"^(?:https?://)?(?:www\.|m\.|music\.)?(?:youtube\.com|youtu\.be|youtube-nocookie\.com)/", re.I)
 
 
 def is_youtube_url(url: str) -> bool:
-    return _extract_youtube_id(url) is not None
+    url = (url or "").strip()
+    return bool(_YT_HOST.match(url)) and _extract_youtube_id(url) is not None
+
+
+def normalize_url(url: str) -> str:
+    url = (url or "").strip()
+    if url and not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", url):
+        url = "https://" + url
+    return url
+
+
+def validate_public_url(url: str) -> str | None:
+    """Return an error message if ``url`` is not a public http(s) URL, else None.
+
+    Blocks loopback/private/link-local targets to avoid server-side request forgery
+    unless ``ALLOW_PRIVATE_URLS=true``.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return "Only http(s) URLs are supported."
+    if get_settings().allow_private_urls:
+        return None
+    host = parsed.hostname
+    if host.lower() in ("localhost", "localhost.localdomain") or host.endswith(".local"):
+        return "URLs pointing to local or private networks are not allowed."
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return f"Could not resolve host '{host}'."
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return "URLs pointing to local or private networks are not allowed."
+    return None
 
 
 def crawl_url(url: str) -> str | None:
-    if not url.startswith(("http://", "https://")):
-        url = "https://" + url
+    url = normalize_url(url)
+    if validate_public_url(url):
+        return None
     if is_youtube_url(url):
         logger.info("YouTube URL passed to web crawler — use transcript API instead: %s", url)
         return None
@@ -58,7 +81,7 @@ def crawl_url(url: str) -> str | None:
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9",
             },
-            timeout=CRAWL_TIMEOUT_SECONDS,
+            timeout=get_settings().crawl_timeout_seconds,
             allow_redirects=True,
         )
         r.raise_for_status()
@@ -94,7 +117,7 @@ def _fetch_youtube_oembed(watch_url: str) -> str | None:
             "https://www.youtube.com/oembed",
             params={"url": watch_url, "format": "json"},
             headers={"User-Agent": _BROWSER_UA},
-            timeout=CRAWL_TIMEOUT_SECONDS,
+            timeout=get_settings().crawl_timeout_seconds,
         )
         r.raise_for_status()
         data = r.json()
@@ -123,7 +146,7 @@ def _youtube_gemini_fallback(video_url: str, page_text: str | None) -> str | Non
             "key concepts, and learning points. Be thorough.\n\n"
             f"{page_text[:8000]}"
         )
-        model = genai.GenerativeModel(GEN_MODEL)
+        model = genai.GenerativeModel(get_settings().gen_model)
         resp = model.generate_content(prompt)
         return (resp.text or "").strip() or None
     except Exception as exc:
@@ -226,6 +249,9 @@ def get_youtube_transcript(video_url: str) -> tuple[str | None, str]:
     return None, hint
 
 
+SOURCE_TYPES = ("web", "youtube", "text")
+
+
 def ingest_text_source(source: str, source_type: str) -> tuple[str | None, str, str]:
     """
     Ingest URL or raw text. Returns (text, error_detail, effective_source_type).
@@ -234,7 +260,7 @@ def ingest_text_source(source: str, source_type: str) -> tuple[str | None, str, 
     source = (source or "").strip()
     stype = (source_type or "").strip().lower()
 
-    if is_youtube_url(source):
+    if stype != "text" and is_youtube_url(source):
         text, detail = get_youtube_transcript(source)
         return text, detail, "youtube"
 
@@ -246,8 +272,10 @@ def ingest_text_source(source: str, source_type: str) -> tuple[str | None, str, 
         return source, "", "text"
 
     if stype == "web":
-        if not source.startswith(("http://", "https://")):
-            source = "https://" + source
+        source = normalize_url(source)
+        problem = validate_public_url(source)
+        if problem:
+            return None, problem, "web"
         text = crawl_url(source)
         if not text:
             return None, (
@@ -263,8 +291,13 @@ def ingest_pdf_bytes(data: bytes) -> str | None:
     try:
         import fitz  # PyMuPDF
         doc = fitz.open(stream=data, filetype="pdf")
+        if doc.needs_pass:
+            logger.warning("PDF is password protected.")
+            return None
         texts = [page.get_text("text") for page in doc]
+        doc.close()
         raw = "\n".join(texts).strip()
+        # Very little text usually means a scanned PDF: fall back to Gemini OCR.
         if len(raw) < 100:
             return ingest_pdf_via_gemini_bytes(data)
         return raw
@@ -299,18 +332,18 @@ def ingest_file_via_gemini(data: bytes, mime_type: str, prompt: str) -> str | No
             tmp.write(data)
             tmp_path = tmp.name
         uploaded = genai.upload_file(tmp_path, mime_type=mime_type)
-        for _ in range(GEMINI_FILE_MAX_POLLS):
+        for _ in range(get_settings().gemini_file_max_polls):
             f = genai.get_file(uploaded.name)
             state = f.state.name if hasattr(f.state, "name") else str(f.state)
             if state == "ACTIVE":
                 break
             if state == "FAILED":
                 raise RuntimeError("Gemini file processing failed.")
-            time.sleep(GEMINI_FILE_POLL_SECONDS)
+            time.sleep(get_settings().gemini_file_poll_seconds)
         else:
             raise TimeoutError("Gemini file processing timed out.")
 
-        model = genai.GenerativeModel(GEN_MODEL)
+        model = genai.GenerativeModel(get_settings().gen_model)
         resp = model.generate_content([uploaded, prompt])
         return (resp.text or "").strip() or None
     except Exception as exc:
@@ -337,6 +370,6 @@ def detect_file_type(filename: str, mime_type: str) -> tuple[str, str] | None:
         return "video", mime_type or mimetypes.guess_type(filename)[0] or "video/mp4"
     if mime_type.startswith("image/") or lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp")):
         return "image", mime_type or mimetypes.guess_type(filename)[0] or "image/jpeg"
-    if lower.endswith(".txt") or mime_type == "text/plain":
+    if lower.endswith((".txt", ".md", ".markdown")) or mime_type in ("text/plain", "text/markdown"):
         return "text", "text/plain"
     return None

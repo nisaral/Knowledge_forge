@@ -1,21 +1,19 @@
 """Gemini embedding helpers with retry, model fallback, and batch resilience."""
+from __future__ import annotations
+
 import logging
+import threading
 import time
+from collections import OrderedDict
 
 import google.generativeai as genai
 import numpy as np
 
-from config import (
-    EMBED_BATCH_SIZE,
-    EMBED_DIM,
-    EMBED_MAX_RETRIES,
-    EMBED_MODEL,
-    GEMINI_API_KEY,
-)
+from knowledge_forge.config import get_settings
+from knowledge_forge.llm import ensure_gemini_configured
 
 logger = logging.getLogger(__name__)
 
-_configured = False
 _active_model: str | None = None
 
 # text-embedding-004 was removed from the API; gemini-embedding-001 is the supported replacement.
@@ -29,7 +27,7 @@ _MODEL_FALLBACKS = [
 def _model_candidates() -> list[str]:
     seen = set()
     candidates = []
-    for m in [EMBED_MODEL, *_MODEL_FALLBACKS]:
+    for m in [get_settings().embed_model, *_MODEL_FALLBACKS]:
         if not m:
             continue
         name = m if m.startswith("models/") else f"models/{m}"
@@ -37,16 +35,6 @@ def _model_candidates() -> list[str]:
             seen.add(name)
             candidates.append(name)
     return candidates
-
-
-def ensure_gemini_configured() -> None:
-    global _configured
-    if _configured:
-        return
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY environment variable not set.")
-    genai.configure(api_key=GEMINI_API_KEY)
-    _configured = True
 
 
 def _parse_embedding(raw) -> list[float]:
@@ -62,7 +50,7 @@ def _parse_embedding(raw) -> list[float]:
 
 def _embed_kwargs(task_type: str) -> dict:
     """Build embed_content kwargs — gemini-embedding-001 supports task_type + output_dimensionality."""
-    kwargs = {"output_dimensionality": EMBED_DIM}
+    kwargs = {"output_dimensionality": get_settings().embed_dim}
     model = _active_model or ""
     if "gemini-embedding-2" not in model:
         kwargs["task_type"] = task_type
@@ -86,7 +74,7 @@ def _call_embed(model: str, content, task_type: str) -> list[float]:
         result = genai.embed_content(
             model=model,
             content=content,
-            output_dimensionality=EMBED_DIM,
+            output_dimensionality=get_settings().embed_dim,
         )
     else:
         result = genai.embed_content(
@@ -113,10 +101,10 @@ def _resolve_active_model() -> str:
     for model in _model_candidates():
         try:
             vec = _call_embed(model, probe, "retrieval_document")
-            if len(vec) != EMBED_DIM:
-                raise ValueError(f"Expected {EMBED_DIM}-dim embedding, got {len(vec)} from {model}")
+            if len(vec) != get_settings().embed_dim:
+                raise ValueError(f"Expected {get_settings().embed_dim}-dim embedding, got {len(vec)} from {model}")
             _active_model = model
-            logger.info("Using embedding model: %s (%d-dim)", model, EMBED_DIM)
+            logger.info("Using embedding model: %s (%d-dim)", model, get_settings().embed_dim)
             return model
         except Exception as exc:
             last_err = exc
@@ -131,32 +119,32 @@ def _embed_single(text: str, task_type: str) -> np.ndarray:
     global _active_model
     _resolve_active_model()
     last_err = None
-    for attempt in range(EMBED_MAX_RETRIES):
+    for attempt in range(get_settings().embed_max_retries):
         try:
             vec = _call_embed(_active_model, text, task_type)
-            if len(vec) != EMBED_DIM:
-                raise ValueError(f"Expected {EMBED_DIM}-dim embedding, got {len(vec)}")
+            if len(vec) != get_settings().embed_dim:
+                raise ValueError(f"Expected {get_settings().embed_dim}-dim embedding, got {len(vec)}")
             return np.array(vec, dtype="float32")
         except Exception as exc:
             last_err = exc
             if "404" in str(exc) or "not found" in str(exc).lower():
                 _active_model = None
                 _resolve_active_model()
-            wait = 2 ** attempt
-            logger.warning("Embedding retry %d/%d: %s", attempt + 1, EMBED_MAX_RETRIES, exc)
-            time.sleep(wait)
-    raise RuntimeError(f"Embedding failed after {EMBED_MAX_RETRIES} attempts: {last_err}")
+            logger.warning("Embedding retry %d/%d: %s", attempt + 1, get_settings().embed_max_retries, exc)
+            if attempt + 1 < get_settings().embed_max_retries:
+                time.sleep(min(8, 2 ** attempt))
+    raise RuntimeError(f"Embedding failed after {get_settings().embed_max_retries} attempts: {last_err}")
 
 
 def gemini_embed(texts: list[str]) -> np.ndarray:
     """Batch-embed documents with per-item fallback on batch failure."""
     if not texts:
-        return np.empty((0, EMBED_DIM), dtype="float32")
+        return np.empty((0, get_settings().embed_dim), dtype="float32")
 
     _resolve_active_model()
     vectors: list[np.ndarray] = []
-    for i in range(0, len(texts), EMBED_BATCH_SIZE):
-        batch = texts[i:i + EMBED_BATCH_SIZE]
+    for i in range(0, len(texts), get_settings().embed_batch_size):
+        batch = texts[i:i + get_settings().embed_batch_size]
         try:
             if "gemini-embedding-2" in (_active_model or ""):
                 raise ValueError("Batch via per-item for embedding-2")
@@ -176,8 +164,8 @@ def gemini_embed(texts: list[str]) -> np.ndarray:
                 raise ValueError(f"Batch size mismatch: sent {len(batch)}, got {len(parsed)}")
 
             for vec in parsed:
-                if len(vec) != EMBED_DIM:
-                    raise ValueError(f"Expected {EMBED_DIM}-dim embedding, got {len(vec)}")
+                if len(vec) != get_settings().embed_dim:
+                    raise ValueError(f"Expected {get_settings().embed_dim}-dim embedding, got {len(vec)}")
                 vectors.append(np.array(vec, dtype="float32"))
         except Exception as exc:
             logger.warning("Batch embed failed (%s); falling back to per-item.", exc)
@@ -187,7 +175,29 @@ def gemini_embed(texts: list[str]) -> np.ndarray:
     return np.vstack(vectors)
 
 
+_QUERY_CACHE_SIZE = 256
+_query_cache: OrderedDict[str, np.ndarray] = OrderedDict()
+_query_cache_lock = threading.Lock()
+
+
 def gemini_embed_query(query: str) -> np.ndarray:
-    """Embed a single query string."""
-    vec = _embed_single(query, "retrieval_query")
-    return vec.reshape(1, -1)
+    """Embed a single query string (LRU-cached so repeated questions are free)."""
+    key = f"{_active_model}|{query}"
+    with _query_cache_lock:
+        if key in _query_cache:
+            _query_cache.move_to_end(key)
+            return _query_cache[key].copy()
+    vec = _embed_single(query, "retrieval_query").reshape(1, -1)
+    with _query_cache_lock:
+        _query_cache[key] = vec.copy()
+        if len(_query_cache) > _QUERY_CACHE_SIZE:
+            _query_cache.popitem(last=False)
+    return vec
+
+
+def reset_embedding_state() -> None:
+    """Forget the probed model and cached query vectors (used by tests)."""
+    global _active_model
+    _active_model = None
+    with _query_cache_lock:
+        _query_cache.clear()
